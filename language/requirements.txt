@@ -1,0 +1,22 @@
+# Language component (Pythia residual-stream SAEs). Versions of the environment the language
+# runs used (Python 3.11). The vision core (<repo>/vision) is imported for the trainers and
+# scorers; its own imports are covered below.
+torch==2.11.0
+transformers==5.8.0
+tokenizers==0.22.2
+safetensors==0.7.0
+huggingface_hub==1.19.0        # prepare_assets.sh only (the one network step)
+numpy==1.26.4
+pyarrow==23.0.1                # reads the corpus parquet shards (no `datasets` dependency)
+sentence-transformers==5.5.1   # text-embedding stage (bge-large document embeddings)
+tqdm>=4.67
+
+# Imported unconditionally by the vision core (trainers / dataset package).
+lmdb==1.7.5
+wandb==0.24.0                  # imported but inactive unless --wandb_project is given
+pandas==3.0.0
+pillow==12.1.0
+
+# Optional: TensorBoard event files (--tb_dir) and the viewer.
+tensorboardX==2.6.5
+tensorboard==2.20.0

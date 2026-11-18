@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Data, features, checkpoints and outputs never belong in the repository
+data/
+# ...except shipped static inputs (the neutral steering prompts).
+!llm_steering/data/
+features/
+checkpoints/
+outputs/
+results/
+runs/
+assets/
+*.lmdb
+*.pt
+*.pth
+*.safetensors
+*.npy
+*.npz
+
+# Experiment trackers
+wandb/
+tensorboard_logs/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

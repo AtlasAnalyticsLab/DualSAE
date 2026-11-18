@@ -1,0 +1,20 @@
+# CB-SAE / CB-DualSAE pipeline (cb_sae/). Versions of the environment the
+# reported CB runs used (Python 3.12). The evaluation step runs
+# vision/branch_metrics.py: install vision/requirements.txt as well.
+torch==2.13.0
+numpy==2.4.2
+lmdb==1.7.5
+tensorboardX==2.6.5
+tqdm==4.68.4
+pandas==3.0.0            # imported by vision/dataset (OpenImagesV7 loader)
+Pillow==12.1.0           # imported by vision/dataset (OpenImagesV7 loader)
+
+# Only for prepare_assets.sh (concept text embeddings with the supervisor
+# CLIP model). The embeddings of the reported runs were computed with these
+# versions (Python 3.11, torch 2.9.1).
+open_clip_torch==3.3.0
+huggingface_hub==0.36.2
+timm==1.0.25
+ftfy==6.3.1
+regex==2026.1.15
+safetensors==0.7.0

@@ -1,0 +1,12 @@
+You are an interpretability researcher studying a vision model. A single feature detector fires strongly on the POSITIVE images shown above and does NOT fire on the NEGATIVE images shown above. Both sets are sampled from the same image distribution (ImageNet).
+
+Your task: identify exactly ONE concrete visual feature that is present in the POSITIVE images but absent in the NEGATIVE images.
+
+{task_specific_instructions}
+
+Rules for the feature you name:
+- It must describe a concrete, visually grounded attribute — an object, an object part, a texture, a color, a shape, or a scene element — not an abstract, emotional, or semantic-category label.
+- It must be present in (almost) all of the POSITIVE images and absent from the NEGATIVE images.
+- Make it as specific as possible while still applying to all the POSITIVE images.
+
+Respond with exactly one feature on a single line, surrounded by double quotes, and write nothing else.

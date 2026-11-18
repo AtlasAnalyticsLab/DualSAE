@@ -1,0 +1,101 @@
+{
+  "_comment": [
+    "Registry of every SAE training grid used by the topic-modeling study (and reused by",
+    "hypothesis_generation/). One entry = one output tree <TM_OUT>/runs/<name>/<encoder>/...",
+    "Each Dual configuration is identified by (run, warmup). Values are the ones the runs used.",
+    "span_coef = gamma, the decorrelation-loss (L_dcor) coefficient; warmups = Sparse-Branch-only",
+    "warm-up steps. A warm-up >= num_epochs * floor(n_train / batch_size) never leaves the warm-up",
+    "phase (the Residual Branch is never trained); such warm-ups are listed in degenerate_warmups and",
+    "trained with --allow_degenerate_warmup so the run is reproduced as it was."
+  ],
+  "datasets": {
+    "imagenet": {
+      "features_env": "FEATURES_IMAGENET",
+      "features_default": "./features/imagenet",
+      "train_split": "train",
+      "val_split": "validation",
+      "caption_side": "imagenet_val",
+      "image_root_env": "IMAGENET_VAL_DIR",
+      "image_root_default": "./data/imagenet/val",
+      "multilabel": false,
+      "main_dataset_flag": "imagenet"
+    },
+    "openimages": {
+      "features_env": "FEATURES_OPENIMAGES",
+      "features_default": "./features/open_images",
+      "train_split": "train",
+      "val_split": "valid",
+      "caption_side": "openimages_test",
+      "image_root_env": "OPENIMAGES_TEST_DIR",
+      "image_root_default": "./data/open_image_v7/test",
+      "multilabel": true,
+      "main_dataset_flag": "open_images"
+    }
+  },
+  "encoders": {
+    "clip":   {"lmdb": "clip_image_features_CLIP-ViT-L-14-DataComp.lmdb",   "extractor_flag": "clip"},
+    "siglip": {"lmdb": "siglip2_image_features_siglip2-so400m-p14-384.lmdb", "extractor_flag": "sigclip"},
+    "vit":    {"lmdb": "vit_features_vit-large-p16-224.lmdb",                "extractor_flag": "vit"}
+  },
+  "seeds": [42, 43, 44],
+  "topic_counts": [50, 100, 200, 300, 500],
+  "baseline_run": {"imagenet": "imagenet_paired", "openimages": "openimages_paired"},
+  "runs": {
+    "imagenet_paired": {
+      "dataset": "imagenet",
+      "trainers": ["TopKTrainer", "BatchTopKTrainer", "JumpReluTrainer",
+                   "DualTopKTrainer", "DualBatchTopKTrainer", "DualJumpReluTrainer"],
+      "span_coef": 1.0,
+      "warmups": [17500],
+      "warmup_layer": false,
+      "degenerate_warmups": [],
+      "description": "Baselines for every ImageNet-1K comparison, plus a Dual arm trained with span_coef 1.0. This Dual arm is the one shown in the image-topic figures."
+    },
+    "imagenet_paired_span001": {
+      "dataset": "imagenet",
+      "trainers": ["DualTopKTrainer", "DualBatchTopKTrainer", "DualJumpReluTrainer"],
+      "span_coef": 0.01,
+      "warmups": [17500],
+      "warmup_layer": false,
+      "degenerate_warmups": [],
+      "description": "Dual arm with span_coef 0.01, warm-up 17500. Also the ImageNet-1K Dual checkpoints of the hypothesis-generation study."
+    },
+    "imagenet_warmup_sweep": {
+      "dataset": "imagenet",
+      "trainers": ["DualTopKTrainer", "DualBatchTopKTrainer", "DualJumpReluTrainer"],
+      "span_coef": 0.01,
+      "warmups": [0, 500, 1000, 2500, 5000, 7500, 10000, 12500, 15000, 20000],
+      "warmup_layer": true,
+      "degenerate_warmups": [],
+      "description": "Dual warm-up sweep (span_coef 0.01); one Dual configuration per warm-up value."
+    },
+    "openimages_paired": {
+      "dataset": "openimages",
+      "trainers": ["TopKTrainer", "BatchTopKTrainer", "JumpReluTrainer",
+                   "DualTopKTrainer", "DualBatchTopKTrainer", "DualJumpReluTrainer"],
+      "span_coef": 0.01,
+      "warmups": [17500],
+      "warmup_layer": false,
+      "degenerate_warmups": [17500],
+      "description": "Baselines for every OpenImagesV7 comparison, plus a Dual arm (span_coef 0.01, warm-up 17500). Also the OpenImagesV7 checkpoints (baseline and Dual) of the hypothesis-generation study."
+    },
+    "openimages_warmup_sweep": {
+      "dataset": "openimages",
+      "trainers": ["DualTopKTrainer", "DualBatchTopKTrainer", "DualJumpReluTrainer"],
+      "span_coef": 0.01,
+      "warmups": [0, 500, 1000, 2500, 5000, 7500, 10000, 12500, 15000, 20000],
+      "warmup_layer": true,
+      "degenerate_warmups": [12500, 15000, 20000],
+      "description": "Dual warm-up sweep on OpenImagesV7 (span_coef 0.01)."
+    },
+    "openimages_jr_warmup500": {
+      "dataset": "openimages",
+      "trainers": ["DualJumpReluTrainer"],
+      "span_coef": 0.01,
+      "warmups": [500],
+      "warmup_layer": false,
+      "degenerate_warmups": [],
+      "description": "Dual-JumpReLU with warm-up 500 on OpenImagesV7 (span_coef 0.01)."
+    }
+  }
+}

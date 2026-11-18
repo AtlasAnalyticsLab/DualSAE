@@ -1,0 +1,15 @@
+# Versions of the environment the steering runs used (Python 3.11).
+torch==2.11.0
+transformers==5.8.0
+tokenizers==0.22.2
+safetensors==0.7.0
+huggingface_hub==1.19.0
+sentence-transformers==5.5.1
+vllm==0.20.0
+opencv-python-headless>=4.13,<4.14   # imported by vLLM's multimodal helpers
+pyarrow==23.0.1                      # Amazon parquet reader
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.8.0
+lmdb==1.7.5
+tqdm==4.68.2

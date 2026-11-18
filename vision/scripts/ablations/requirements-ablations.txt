@@ -1,0 +1,11 @@
+# Extra packages for scripts/ablations and analysis/ablations (on top of vision/requirements.txt).
+# Versions of the environments the runs and figures were produced with.
+tensorboardX==2.6.5        # TensorBoard logging + event reading (collectors, warm-up curves)
+matplotlib==3.10.8
+pillow==12.1.0
+scikit-learn==1.8.0        # t-SNE / PCA
+timm==1.0.25               # ImageNet-1K class names and WordNet ids (t-SNE figures)
+nltk==3.9.4                # WordNet superclasses (t-SNE colouring); corpus via prepare_assets.sh
+datasets==4.6.1            # ImageNet-1K images for the image-grid figures; cached via prepare_assets.sh
+pytest                     # tests/test_abl_*.py
+# optional: seaborn (style of the warm-up figure; a matplotlib fallback palette is used otherwise)

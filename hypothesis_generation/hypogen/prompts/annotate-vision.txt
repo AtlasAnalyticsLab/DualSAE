@@ -1,0 +1,7 @@
+You are shown ONE image (above) and a PROPERTY describing a visual feature.
+
+Decide whether the image clearly satisfies the PROPERTY. Judge only what is visible in the image. When you are uncertain, answer No.
+
+Answer with exactly one word on the first line: Yes or No.
+
+PROPERTY: "{concept}"

@@ -1,0 +1,27 @@
+# Pinned to the environment the topic-modeling runs used (Python 3.11).
+# The repository's vision/ requirements (SAE training) must be installed as well.
+torch==2.11.0
+torchvision==0.26.0
+transformers==5.8.0
+tokenizers==0.22.2
+huggingface_hub==1.19.0
+safetensors==0.7.0
+accelerate==1.13.0
+vllm==0.20.0                # LLM judge (coherence / intruder, topic labels, image-topic judge)
+flashinfer-python==0.6.8.post1
+triton==3.6.0
+open_clip_torch==3.3.0      # CLIP encoder
+timm==1.0.27
+einops==0.8.2
+sentencepiece==0.2.0
+gensim==4.3.3               # word2vec (needs numpy<2 / scipy<1.14)
+nltk==3.9.4
+POT==0.9.0                  # optimal transport for the WMD diversity metric
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.8.0
+pandas==3.0.0
+matplotlib==3.10.8
+pillow==12.1.0
+lmdb==1.7.5
+tqdm==4.68.2

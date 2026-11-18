@@ -1,0 +1,24 @@
+# Pinned to the environment the hypothesis-generation runs used (Python 3.11).
+# Also install topic_modeling/requirements.txt (shared encoders, vLLM, SAE checkpoint loading) and the
+# repository's vision/ requirements.
+torch==2.11.0
+torchvision==0.26.0
+transformers==5.8.0
+vllm==0.20.0                # InternVL2.5-8B proposer / annotator
+open_clip_torch==3.3.0
+timm==1.0.27
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.8.0
+statsmodels==0.14.6         # used by HypotheSAEs score_hypotheses
+pandas==3.0.0
+matplotlib==3.10.8
+pillow==12.1.0
+lmdb==1.7.5
+tqdm==4.68.2
+# Imported at package import time by hypothesaes/__init__.py (no API is called by this pipeline):
+openai==2.41.1
+tiktoken==0.12.0
+sentence-transformers==5.5.1
+# HypotheSAEs (Apache-2.0) at the pinned commit; installed without its own dependencies, as in the runs.
+# pip install --no-deps "hypothesaes @ git+https://github.com/rmovva/HypotheSAEs@4573abd87482ad3f02f850e0ca38897cac3e699b"

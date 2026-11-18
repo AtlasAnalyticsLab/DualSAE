@@ -1,0 +1,880 @@
+diff --git a/baselines/utils/make_bow_cache_sharded.py b/baselines/utils/make_bow_cache_sharded.py
+index cf511bf..9d49e4a 100644
+--- a/baselines/utils/make_bow_cache_sharded.py
++++ b/baselines/utils/make_bow_cache_sharded.py
+@@ -79,27 +79,42 @@ from nltk.tokenize import word_tokenize
+ 
+ 
+ def download_nltk_data():
+-    """Downloads necessary NLTK data if not already present."""
++    """Verify required NLTK resources are present LOCALLY — never downloads.
++
++    Why not download here: compute nodes may have no internet, so any nltk.download() call
++    would hang/fail. Pre-fetch everything with prepare_assets.sh (set NLTK_DATA to the
++    asset directory).
++
++    Why probe by *using* the resources instead of nltk.data.find(): find() is brittle
++    across nltk versions and, in particular, falsely reports 'corpora/wordnet' as
++    missing when only wordnet.zip is present (no extracted dir) — even though the
++    corpus loads fine. We therefore exercise each loader and only fail if it truly
++    cannot load, so a working offline cache is never mistaken for a missing one.
++    """
++    missing = []
+     try:
+-        nltk.data.find('tokenizers/punkt')
+-    except:
+-        print("Downloading NLTK 'punkt' model...", file=sys.stderr)
+-        nltk.download('punkt')
++        word_tokenize("warm up the tokenizer")          # punkt / punkt_tab
++    except LookupError:
++        missing.append("punkt / punkt_tab (tokenizers)")
+     try:
+-        nltk.data.find('corpora/stopwords')
+-    except:
+-        print("Downloading NLTK 'stopwords'...", file=sys.stderr)
+-        nltk.download('stopwords')
++        stopwords.words("english")                       # corpora/stopwords
++    except LookupError:
++        missing.append("stopwords (corpora)")
+     try:
+-        nltk.data.find('corpora/wordnet')
+-    except:
+-        print("Downloading NLTK 'wordnet'...", file=sys.stderr)
+-        nltk.download('wordnet')
++        wordnet.ensure_loaded()                          # corpora/wordnet (+omw)
++    except LookupError:
++        missing.append("wordnet (corpora)")
+     try:
+-        nltk.data.find('taggers/averaged_perceptron_tagger')
+-    except:
+-        print("Downloading NLTK 'averaged_perceptron_tagger'...", file=sys.stderr)
+-        nltk.download('averaged_perceptron_tagger')
++        nltk.pos_tag(["warmup"])                         # averaged_perceptron_tagger(_eng)
++    except LookupError:
++        missing.append("averaged_perceptron_tagger(_eng) (taggers)")
++    if missing:
++        raise RuntimeError(
++            "Missing NLTK resource(s) and downloads are disabled (offline runtime): "
++            + ", ".join(missing)
++            + f". NLTK_DATA={os.environ.get('NLTK_DATA', '<unset>')}. "
++            "Run prepare_assets.sh (with internet access) to pre-fetch them."
++        )
+ 
+ 
+ class DocumentProcessor:
+diff --git a/evaluation.py b/evaluation.py
+index b108c08..91b100b 100644
+--- a/evaluation.py
++++ b/evaluation.py
+@@ -24,7 +24,9 @@ import numpy as np
+ import ot
+ 
+ from tqdm import tqdm
+-from vllm import LLM, SamplingParams
++# NOTE: vLLM is imported lazily inside main() — only when there are coherence/intruder files
++# left to compute (so a fully-resumed run never pays the import) and only AFTER diversity.
++# It is REQUIRED for the LLM metrics (see the topic_modeling requirements).
+ from transformers import AutoTokenizer
+ 
+ # ---------------------------------------------------------------------------
+@@ -319,6 +321,14 @@ def main():
+                         help="Maximum sequence length for vLLM.")
+     parser.add_argument("--tensor-parallel-size", type=int, default=1,
+                         help="Tensor-parallelism degree for vLLM.")
++    parser.add_argument("--w2v-dir", type=str, default=None,
++                        help="Dir with embeddings.np.npy + vocabulary.json for diversity. Defaults "
++                             "to $SAE_TM_W2V_DIR or ./assets/w2v. No download — built by prepare_assets.sh.")
++    parser.add_argument("--path-filter", type=str, default=None,
++                        help="Substring filter on globbed top_words.txt paths (batch mode only). "
++                             "Used to shard a --topics-root subtree finer than its directory layout "
++                             "allows — e.g. '/seed42/' evaluates only seed-42 cells across all warmups. "
++                             "Keeps the single-vLLM-load + per-file resume semantics intact.")
+ 
+     args = parser.parse_args()
+ 
+@@ -336,10 +346,17 @@ def main():
+         outputs_root = os.path.abspath(args.outputs_root)
+         pattern = os.path.join(topics_root, "**", "top_words.txt")
+         top_words_files = glob.glob(pattern, recursive=True)
++        # Optional finer sharding: keep only paths containing the filter substring (e.g. '/seed42/').
++        # The topics_root stays at the subtree root so get_output_path() still mirrors paths correctly;
++        # we only narrow WHICH files this task processes, so a parallel sibling task can take another seed.
++        if args.path_filter:
++            top_words_files = [f for f in top_words_files if args.path_filter in f]
+         if not top_words_files:
+-            logging.error(f"No top_words.txt files found under {topics_root}")
++            logging.error(f"No top_words.txt files found under {topics_root}"
++                          + (f" matching path-filter '{args.path_filter}'" if args.path_filter else ""))
+             sys.exit(1)
+-        logging.info(f"Found {len(top_words_files)} top_words.txt files to evaluate.")
++        logging.info(f"Found {len(top_words_files)} top_words.txt files to evaluate."
++                     + (f" (path-filter '{args.path_filter}')" if args.path_filter else ""))
+     else:
+         topic_dir = os.path.abspath(args.topic_dir)
+         top_words_file = os.path.join(topic_dir, "top_words.txt")
+@@ -352,36 +369,75 @@ def main():
+         os.makedirs(outputs_root, exist_ok=True)
+ 
+     # ── 1. Diversity (no LLM needed) ─────────────────────────────────────
++    # Resumable: skip files whose diversity.jsonl already exists (a re-run continues instead
++    # of recomputing). If nothing is left, skip the 3.4 GB w2v load too.
++    div_todo = [f for f in top_words_files
++                if not os.path.exists(get_output_path(f, topics_root, outputs_root, "diversity.jsonl"))]
+     print("\n" + "=" * 60)
+-    print(f"Running Topic Diversity (WMD) for {len(top_words_files)} files …")
++    print(f"Topic Diversity (WMD): {len(div_todo)} to compute, "
++          f"{len(top_words_files) - len(div_todo)} already done.")
+     print("=" * 60)
+-    
+-    logging.info("Loading word2vec embeddings for diversity …")
+-    w2v_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "gensim", "w2v")
+-    embeddings = np.load(os.path.join(w2v_dir, "embeddings.np.npy"))
+-    with open(os.path.join(w2v_dir, "vocabulary.json"), "r", encoding="utf-8") as f:
+-        vocabulary = json.load(f)
+-    w2v = {word: embeddings[idx] for idx, word in enumerate(vocabulary)}
+-    mean_emb = embeddings.mean(axis=0)
+-    del embeddings, vocabulary  # free memory
+-    
+-    for file in tqdm(top_words_files, desc="Diversity"):
+-        out_path = get_output_path(file, topics_root, outputs_root, "diversity.jsonl")
+-        run_diversity(file, out_path, w2v, mean_emb)
+-
+-    # ── 2 & 3. Build all LLM prompts before loading the model ────────────
++
++    if div_todo:
++        logging.info("Loading word2vec embeddings for diversity …")
++        # Read pre-built embeddings from the asset directory.
++        # Override with --w2v-dir or $SAE_TM_W2V_DIR. No download — built by prepare_assets.sh.
++        w2v_dir = args.w2v_dir or os.environ.get(
++            "SAE_TM_W2V_DIR", "./assets/w2v"
++        )
++        if not os.path.isfile(os.path.join(w2v_dir, "embeddings.np.npy")):
++            raise FileNotFoundError(
++                f"word2vec embeddings not found in {w2v_dir}. Run prepare_assets.sh first."
++            )
++        embeddings = np.load(os.path.join(w2v_dir, "embeddings.np.npy"))
++        with open(os.path.join(w2v_dir, "vocabulary.json"), "r", encoding="utf-8") as f:
++            vocabulary = json.load(f)
++        w2v = {word: embeddings[idx] for idx, word in enumerate(vocabulary)}
++        mean_emb = embeddings.mean(axis=0)
++        del embeddings, vocabulary  # free memory
++
++        for file in tqdm(div_todo, desc="Diversity"):
++            out_path = get_output_path(file, topics_root, outputs_root, "diversity.jsonl")
++            run_diversity(file, out_path, w2v, mean_emb)
++
++    # ── 2 & 3. LLM-judged metrics (coherence + intruder) — ALWAYS computed. ──
++    # vLLM is REQUIRED here; fail loudly if it can't load rather than silently producing a
++    # partial (diversity-only) result. Resumable: only (re)build prompts for files still
++    # MISSING each metric's output, so a re-submitted job continues instead of regenerating.
++    # If both metrics are already complete for every file, skip the (expensive) model load.
++    coh_todo = [f for f in top_words_files
++                if not os.path.exists(get_output_path(f, topics_root, outputs_root, "coherence.jsonl"))]
++    int_todo = [f for f in top_words_files
++                if not os.path.exists(get_output_path(f, topics_root, outputs_root, "intruder.jsonl"))]
+     print("\n" + "=" * 60)
+-    print("Generating coherence & intruder prompts …")
++    print(f"LLM metrics — coherence: {len(coh_todo)} to do, intruder: {len(int_todo)} to do "
++          f"(of {len(top_words_files)} topic files).")
+     print("=" * 60)
+-
++    if not coh_todo and not int_todo:
++        logging.info("Coherence & intruder already computed for all files — nothing to do.")
++        return
++
++    # Run the vLLM V1 engine in-process: on some systems the multiprocessing EngineCore subprocess
++    # can hang at bootstrap (before loading weights) waiting on its READY handshake. In-process is
++    # correct for this synchronous batched llm.generate() use. MUST be set before the vllm import;
++    # setdefault so an explicit environment export still wins.
++    os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
++    try:
++        from vllm import LLM, SamplingParams
++    except Exception as e:  # ImportError, or platform/CUDA init failure
++        raise RuntimeError(
++            f"vLLM is required for the coherence/intruder metrics but could not be imported "
++            f"({type(e).__name__}: {e}). Install the pinned topic_modeling requirements."
++        ) from e
++
++    # Build prompts only for the files each metric still needs.
+     all_coh_prompts, all_coh_map = [], []
+     all_int_prompts, all_int_map = [], []
+-
+-    for file in top_words_files:
++    for file in coh_todo:
+         c_prompts, c_map = build_coherence_prompts(file, args.k, args.r)
+         all_coh_prompts.extend(c_prompts)
+         all_coh_map.extend(c_map)
+-
++    for file in int_todo:
+         i_prompts, i_map = build_intruder_prompts(file, args.k, args.n, args.r)
+         all_int_prompts.extend(i_prompts)
+         all_int_map.extend(i_map)
+diff --git a/interpret_sae.py b/interpret_sae.py
+index b57a5ca..92c9f80 100644
+--- a/interpret_sae.py
++++ b/interpret_sae.py
+@@ -11,8 +11,12 @@ from torch.utils.data import Dataset, DataLoader
+ from tqdm import tqdm
+ from typing import Union, Optional
+ from scipy.sparse import load_npz, csr_matrix, save_npz, vstack
+-from train_sae_cached_ddp import BatchTopKSAE, AutoEncoderTopK
+-from libraries.dictionary_learning.dictionary import AutoEncoder
++# train_sae_cached_ddp.py is not part of this repo; the SAE classes it referenced live in
++# the dictionary_learning library and are exactly what train_sae_cached.py trains/saves.
++from libraries.dictionary_learning.trainers.batch_top_k import BatchTopKSAE
++from libraries.dictionary_learning.trainers.top_k import AutoEncoderTopK
++from libraries.dictionary_learning.dictionary import AutoEncoder, JumpReluAutoEncoder
++from libraries.dictionary_learning.trainers.dual_sae import DualSAE
+ 
+ 
+ @torch.inference_mode()
+@@ -257,7 +261,9 @@ def collate_fn(batch: list[tuple[torch.Tensor, csr_matrix]]) -> tuple[torch.Tens
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--checkpoint", type=str, required=True)
+-    parser.add_argument("--sae-type", type=str, required=True, choices=["BatchTopKTrainer", "TopKTrainer", "StandardTrainer"])
++    parser.add_argument("--sae-type", type=str, required=True, choices=[
++        "BatchTopKTrainer", "TopKTrainer", "StandardTrainer", "JumpReluTrainer",
++        "DualSAETrainer", "DualTopKTrainer", "DualBatchTopKTrainer", "DualJumpReluTrainer"])
+     parser.add_argument("--embeddings", type=str, nargs="+", required=True,
+                         help="One or more file paths to the embeddings (accepts multiple).")
+     
+@@ -277,6 +283,9 @@ def main():
+                     help="If set, stream the full N x K theta to save_path/theta_csr.npz as CSR.")
+     parser.add_argument("--theta-batch-size", type=int, default=8192)
+     parser.add_argument("--init-pi", type=float, default=0.3)
++    parser.add_argument("--old-impl", action="store_true",
++                        help="Load the checkpoint via old_sae_adapter (a best_val_monoscore_model.pt "
++                             "written by the repo's vision/ SAE trainers). encode(x)=forward(x)[1].")
+     args = parser.parse_args()
+ 
+     torch.manual_seed(args.seed)
+@@ -284,20 +293,42 @@ def main():
+ 
+     # ----- Load SAE checkpoint -----
+     assert args.checkpoint.endswith(".pt")
+-    if args.sae_type == "BatchTopKTrainer":
++    device = "cuda" if torch.cuda.is_available() else "cpu"
++
++    if args.old_impl:
++        # Checkpoint from the repo's vision/ SAE trainers (best_val_monoscore_model.pt).
++        # The adapter reconstructs the model from its model_cfg and exposes
++        # encode(x) = forward(x)[1] (the sparse / mono code).
++        from old_sae_adapter import load_old_sae
++        sae = load_old_sae(args.checkpoint, args.sae_type, device=device)
++    elif args.sae_type == "BatchTopKTrainer":
+         sae = BatchTopKSAE.from_pretrained(args.checkpoint)
+     elif args.sae_type == "TopKTrainer":
+         sae = AutoEncoderTopK.from_pretrained(args.checkpoint)
+     elif args.sae_type == "StandardTrainer":
+         sae = AutoEncoder.from_pretrained(args.checkpoint)
++    elif args.sae_type == "JumpReluTrainer":
++        # JumpReluAutoEncoder.encode() returns the sparse jump-ReLU codes (post-threshold).
++        sae = JumpReluAutoEncoder.from_pretrained(args.checkpoint)
++    elif args.sae_type in ("DualSAETrainer", "DualTopKTrainer", "DualBatchTopKTrainer", "DualJumpReluTrainer"):
++        # DualSAE.encode() returns only the sparse mono-branch codes z. sparsity_mode selects the
++        # mono rule (auto-inferred for jump_relu from the threshold param if not given).
++        _dual_modes = {
++            "DualTopKTrainer": "topk",
++            "DualBatchTopKTrainer": "batch_topk",
++            "DualJumpReluTrainer": "jump_relu",
++            "DualSAETrainer": "topk",
++        }
++        sae = DualSAE.from_pretrained(args.checkpoint, sparsity_mode=_dual_modes[args.sae_type])
+     else:
+         raise ValueError(
+             f"Invalid sae-type: {args.sae_type}. "
+-            f"Expected one of ['BatchTopKTrainer', 'TopKTrainer', 'StandardTrainer']."
++            f"Expected one of ['BatchTopKTrainer','TopKTrainer','StandardTrainer','JumpReluTrainer',"
++            f"'DualSAETrainer','DualTopKTrainer','DualBatchTopKTrainer','DualJumpReluTrainer']."
+         )
+ 
+-    device = "cuda" if torch.cuda.is_available() else "cpu"
+-    sae_dtype = torch.float32 if device == "cpu" else torch.bfloat16
++    # --old-impl (vision/) models run in float32 (as trained); SAE-TM dict models can use bf16 on GPU.
++    sae_dtype = torch.float32 if (args.old_impl or device == "cpu") else torch.bfloat16
+     sae = sae.to(device=device, dtype=sae_dtype)
+     sae.eval()
+ 
+diff --git a/libraries/dictionary_learning/trainers/__init__.py b/libraries/dictionary_learning/trainers/__init__.py
+index d2453ce..967855c 100644
+--- a/libraries/dictionary_learning/trainers/__init__.py
++++ b/libraries/dictionary_learning/trainers/__init__.py
+@@ -6,6 +6,7 @@ from .top_k import TopKTrainer
+ from .jumprelu import JumpReluTrainer
+ from .batch_top_k import BatchTopKTrainer, BatchTopKSAE
+ from .matryoshka_batch_top_k import MatryoshkaBatchTopKTrainer, MatryoshkaBatchTopKSAE
++from .dual_sae import DualSAETrainer, DualSAE
+ 
+ 
+ __all__ = [
+@@ -19,4 +20,6 @@ __all__ = [
+     "BatchTopKSAE",
+     "MatryoshkaBatchTopKTrainer",
+     "MatryoshkaBatchTopKSAE",
++    "DualSAETrainer",
++    "DualSAE",
+ ]
+diff --git a/libraries/dictionary_learning/trainers/dual_sae.py b/libraries/dictionary_learning/trainers/dual_sae.py
+new file mode 100644
+index 0000000..ccca616
+--- /dev/null
++++ b/libraries/dictionary_learning/trainers/dual_sae.py
+@@ -0,0 +1,472 @@
++"""
++DualSAE as a SAE-TM `dictionary_learning` dictionary/trainer.
++
++NOTE: the topic-modeling pipeline shipped with this repository does NOT use this class. Its SAEs
++are trained by the repository's `vision/` trainers and loaded through `interpret_sae.py --old-impl`
++(old_sae_adapter.py). This module is kept only because `interpret_sae.py` imports it at module
++level; it is an independent re-implementation and was not used to produce any reported run.
++
++DualSAE wraps a standard SAE Sparse Branch (whose sparsity rule S is swappable:
++topk / batch_topk / jump_relu) with a Residual Branch that models the residual:
++
++    z   = S(ReLU(W_E (x - b_dec)))          # sparse code  (what topic modeling uses)
++    xM  = W_D z + b_dec                       # Sparse Branch reconstruction
++    r   = x - xM                              # residual
++    r̂   = poly(r)                             # Residual Branch output (1 hidden layer, width 512, GELU)
++    x̂   = xM + r̂                              # full reconstruction
++
++  1. Decorrelation penalty  L_dcor = mean_active( (r̂ @ W_D)^2 )  (coef 0.01, ACTIVE latents only).
++  2. Two-stage training: a warm-up phase trains the Sparse Branch alone (Residual Branch frozen,
++     no decorrelation); then both branches train jointly with the decorrelation penalty.
++
++`encode()` returns ONLY the sparse code z.
++"""
++
++import math
++import torch as t
++import torch.nn as nn
++import torch.nn.functional as F
++import torch.autograd as autograd
++from collections import namedtuple
++from typing import Optional
++
++from ..dictionary import Dictionary
++from ..trainers.trainer import (
++    SAETrainer,
++    get_lr_schedule,
++    set_decoder_norm_to_unit_norm,
++    remove_gradient_parallel_to_decoder_directions,
++)
++
++
++@t.no_grad()
++def geometric_median(points: t.Tensor, max_iter: int = 100, tol: float = 1e-5) -> t.Tensor:
++    """Geometric median for b_dec init (same practice as TopK/BatchTopK trainers)."""
++    guess = points.mean(dim=0)
++    prev = t.zeros_like(guess)
++    weights = t.ones(len(points), device=points.device)
++    for _ in range(max_iter):
++        prev = guess
++        weights = 1.0 / t.norm(points - guess, dim=1).clamp_min(1e-8)
++        weights /= weights.sum()
++        guess = (weights.unsqueeze(1) * points).sum(dim=0)
++        if t.norm(guess - prev) < tol:
++            break
++    return guess
++
++
++# ── JumpReLU primitives (log-threshold form) ──────
++class _RectangleFunction(autograd.Function):
++    @staticmethod
++    def forward(ctx, x):
++        ctx.save_for_backward(x)
++        return ((x > -0.5) & (x < 0.5)).float()
++
++    @staticmethod
++    def backward(ctx, grad_output):
++        (x,) = ctx.saved_tensors
++        g = grad_output.clone()
++        g[(x <= -0.5) | (x >= 0.5)] = 0
++        return g
++
++
++class _JumpReLUFunction(autograd.Function):
++    """y = x · 1[x > exp(log_threshold)], with straight-through threshold gradient."""
++    @staticmethod
++    def forward(ctx, x, log_threshold, bandwidth):
++        ctx.save_for_backward(x, log_threshold, t.tensor(bandwidth))
++        threshold = t.exp(log_threshold)
++        return x * (x > threshold).float()
++
++    @staticmethod
++    def backward(ctx, grad_output):
++        x, log_threshold, bw = ctx.saved_tensors
++        bandwidth = bw.item()
++        threshold = t.exp(log_threshold)
++        x_grad = (x > threshold).float() * grad_output
++        thr_grad = (
++            -(threshold / bandwidth)
++            * _RectangleFunction.apply((x - threshold) / bandwidth)
++            * grad_output
++        )
++        return x_grad, thr_grad, None
++
++
++class _StepFunction(autograd.Function):
++    """1[x > exp(log_threshold)] used to get a differentiable L0 (for jump_relu penalty)."""
++    @staticmethod
++    def forward(ctx, x, log_threshold, bandwidth):
++        ctx.save_for_backward(x, log_threshold, t.tensor(bandwidth))
++        threshold = t.exp(log_threshold)
++        return (x > threshold).float()
++
++    @staticmethod
++    def backward(ctx, grad_output):
++        x, log_threshold, bw = ctx.saved_tensors
++        bandwidth = bw.item()
++        threshold = t.exp(log_threshold)
++        thr_grad = (
++            -(1.0 / bandwidth)
++            * _RectangleFunction.apply((x - threshold) / bandwidth)
++            * grad_output
++        )
++        return t.zeros_like(x), thr_grad, None
++
++
++VALID_SPARSITY_MODES = ("topk", "batch_topk", "jump_relu")
++
++
++class DualSAE(Dictionary, nn.Module):
++    """Dual-branch SAE with a swappable mono sparsity rule.
++
++    Args:
++        activation_dim : input/output dim D
++        dict_size      : number of mono latents F
++        k              : top-k (topk / batch_topk modes)
++        sparsity_mode  : "topk" | "batch_topk" | "jump_relu"
++        poly_hidden    : poly MLP hidden width (paper: 512)
++        bandwidth      : JumpReLU straight-through bandwidth (jump_relu mode)
++    """
++
++    def __init__(
++        self,
++        activation_dim: int,
++        dict_size: int,
++        k: int,
++        sparsity_mode: str = "topk",
++        poly_hidden: int = 512,
++        bandwidth: float = 1e-3,
++        jump_init_threshold: float = 1e-3,
++    ):
++        super().__init__()
++        assert sparsity_mode in VALID_SPARSITY_MODES, f"bad sparsity_mode {sparsity_mode}"
++        self.activation_dim = activation_dim
++        self.dict_size = dict_size
++        self.sparsity_mode = sparsity_mode
++        self.poly_hidden = poly_hidden
++        self.bandwidth = bandwidth
++
++        # k persisted in state_dict so from_pretrained needs no side metadata.
++        self.register_buffer("k", t.tensor(int(k), dtype=t.int))
++
++        # Mono branch: unit-norm decoder columns (re-enforced each step), tied-init encoder.
++        self.decoder = nn.Linear(dict_size, activation_dim, bias=False)
++        self.decoder.weight.data = set_decoder_norm_to_unit_norm(
++            self.decoder.weight, activation_dim, dict_size
++        )
++        self.encoder = nn.Linear(activation_dim, dict_size)
++        self.encoder.weight.data = self.decoder.weight.T.clone()
++        self.encoder.bias.data.zero_()
++        self.b_dec = nn.Parameter(t.zeros(activation_dim))
++
++        # JumpReLU per-feature learnable threshold (only for jump_relu mode).
++        # IMPORTANT: init threshold = exp(log_threshold) to a SMALL value (0.001), not 1.0.
++        # Inputs here are unit-norm, so post-ReLU activations are well below 1.0; a threshold
++        # of 1.0 (log_threshold=0) zeros everything, leaving the encoder with no gradient
++        # (and the rectangle window for the threshold gradient also misses). Starting
++        # permissive lets features fire; the L0 penalty then raises thresholds.
++        self.jump_log_threshold = (
++            nn.Parameter(t.full((dict_size,), math.log(jump_init_threshold)))
++            if sparsity_mode == "jump_relu" else None
++        )
++
++        # Poly branch: one hidden layer of width `poly_hidden` + GELU (paper).
++        self.poly = nn.Sequential(
++            nn.Linear(activation_dim, poly_hidden),
++            nn.GELU(),
++            nn.Linear(poly_hidden, activation_dim),
++        )
++
++    # ── Dictionary interface ────────────────────────────────────────────────────
++    def pre_acts(self, x: t.Tensor) -> t.Tensor:
++        """Post-ReLU, pre-sparsify activations (used for AuxK / JumpReLU L0)."""
++        return F.relu(self.encoder(x - self.b_dec))
++
++    def _sparsify(self, post_relu: t.Tensor) -> t.Tensor:
++        """Apply the mono sparsity rule to post-ReLU activations → sparse code z."""
++        if self.sparsity_mode == "topk":
++            k = int(self.k.item())
++            top = post_relu.topk(k, sorted=False, dim=-1)
++            return t.zeros_like(post_relu).scatter_(-1, top.indices, top.values)
++        if self.sparsity_mode == "batch_topk":
++            # Keep exactly k·B entries across the whole batch (by value).
++            k = int(self.k.item())
++            B = post_relu.size(0)
++            flat = post_relu.flatten()
++            top = flat.topk(min(k * B, flat.numel()), sorted=False)
++            return (
++                t.zeros_like(flat).scatter_(-1, top.indices, top.values).reshape(post_relu.shape)
++            )
++        # jump_relu
++        return _JumpReLUFunction.apply(post_relu, self.jump_log_threshold, self.bandwidth)
++
++    def encode(self, x: t.Tensor, return_pre: bool = False):
++        """Sparse MONO code z (B, dict_size) — the interpretable code topic modeling uses."""
++        post_relu = self.pre_acts(x)
++        z = self._sparsify(post_relu)
++        if return_pre:
++            return z, post_relu
++        return z
++
++    def decode(self, z: t.Tensor) -> t.Tensor:
++        return self.decoder(z) + self.b_dec
++
++    def forward(self, x: t.Tensor, output_features: bool = False):
++        z = self.encode(x)
++        xM = self.decode(z)
++        r_hat = self.poly(x - xM)
++        x_hat = xM + r_hat
++        return (x_hat, z) if output_features else x_hat
++
++    def scale_biases(self, scale: float):
++        self.encoder.bias.data *= scale
++        self.b_dec.data *= scale
++        if self.jump_log_threshold is not None:
++            # threshold = exp(log_threshold); scaling threshold by `scale` shifts the log.
++            self.jump_log_threshold.data += math.log(scale)
++
++    @classmethod
++    def from_pretrained(
++        cls,
++        path: str,
++        sparsity_mode: str = "topk",
++        k: Optional[int] = None,
++        poly_hidden: Optional[int] = None,
++        bandwidth: float = 1e-3,
++        device=None,
++        **kwargs,
++    ) -> "DualSAE":
++        sd = t.load(path, map_location="cpu")
++        dict_size, activation_dim = sd["encoder.weight"].shape
++        if k is None:
++            k = int(sd["k"].item())
++        if poly_hidden is None:
++            poly_hidden = sd["poly.0.weight"].shape[0]
++        # Infer jump_relu from the presence of the threshold param if not specified explicitly.
++        if "jump_log_threshold" in sd and sparsity_mode != "jump_relu":
++            sparsity_mode = "jump_relu"
++        ae = cls(activation_dim, dict_size, k, sparsity_mode, poly_hidden, bandwidth)
++        ae.load_state_dict(sd)
++        if device is not None:
++            ae.to(device)
++        return ae
++
++
++class DualSAETrainer(SAETrainer):
++    """Two-stage DualSAE trainer (mono warm-up → joint + decorrelation).
++
++    Required: steps, activation_dim, dict_size, k, layer, lm_name.
++    Paper-faithful optionals: sparsity_mode, poly_hidden=512, decorr_coef=0.01,
++    dual_warmup_steps=2500, auxk_alpha=1/32, sparsity_penalty=1e-4 (jump_relu L0),
++    bandwidth=1e-3, lr=1e-4, eps=6.25e-10, warmup_steps, decay_start.
++    """
++
++    def __init__(
++        self,
++        steps: int,
++        activation_dim: int,
++        dict_size: int,
++        k: int,
++        layer: int,
++        lm_name: str,
++        sparsity_mode: str = "topk",
++        dict_class: type = DualSAE,
++        poly_hidden: int = 512,
++        decorr_coef: float = 0.01,
++        dual_warmup_steps: int = 2500,
++        auxk_alpha: float = 1 / 32,
++        sparsity_penalty: float = 1e-4,
++        bandwidth: float = 1e-3,
++        lr: float = 1e-4,
++        eps: float = 6.25e-10,
++        warmup_steps: int = 1000,
++        decay_start: Optional[int] = None,
++        seed: Optional[int] = None,
++        device: Optional[str] = None,
++        wandb_name: str = "DualSAE",
++        submodule_name: Optional[str] = None,
++    ):
++        super().__init__(seed)
++        assert layer is not None and lm_name is not None
++        assert sparsity_mode in VALID_SPARSITY_MODES
++        self.layer = layer
++        self.lm_name = lm_name
++        self.submodule_name = submodule_name
++        self.wandb_name = wandb_name
++        self.steps = steps
++        self.decay_start = decay_start
++        self.warmup_steps = warmup_steps
++        self.k = k
++        self.sparsity_mode = sparsity_mode
++        self.decorr_coef = decorr_coef
++        self.dual_warmup_steps = dual_warmup_steps
++        self.auxk_alpha = auxk_alpha
++        self.sparsity_penalty = sparsity_penalty
++
++        if seed is not None:
++            t.manual_seed(seed)
++            t.cuda.manual_seed_all(seed)
++
++        self.ae = dict_class(activation_dim, dict_size, k, sparsity_mode, poly_hidden, bandwidth)
++
++        self.device = device or ("cuda" if t.cuda.is_available() else "cpu")
++        self.ae.to(self.device)
++        self.lr = lr
++
++        # AuxK dead-feature revival (topk/batch_topk), mirroring BatchTopKTrainer.
++        self.dead_feature_threshold = 10_000_000
++        self.top_k_aux = activation_dim // 2
++        self.num_tokens_since_fired = t.zeros(dict_size, dtype=t.long, device=self.device)
++        self.logging_parameters = ["effective_l0", "dead_features", "in_warmup"]
++        self.effective_l0 = -1
++        self.dead_features = -1
++        self.in_warmup = True
++
++        # Adam with the paper's epsilon.
++        self.optimizer = t.optim.Adam(self.ae.parameters(), lr=lr, betas=(0.9, 0.999), eps=eps)
++        lr_fn = get_lr_schedule(steps, warmup_steps, decay_start=decay_start)
++        self.scheduler = t.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_fn)
++
++    # ── loss components ──────────────────────────────────────────────────────────
++    def _decorr_loss(self, r_hat: t.Tensor, z: t.Tensor) -> t.Tensor:
++        """Decorrelation: penalize r̂'s overlap with ACTIVE mono-decoder columns.
++
++        decoder.weight is (D, F) for nn.Linear(F, D), so r̂ @ decoder.weight is (B, F):
++        one overlap per latent. Mask to active latents and normalize by n_active.
++        """
++        overlap = r_hat @ self.ae.decoder.weight                  # (B, F)
++        active = (z != 0).float()
++        overlap = overlap * active
++        n_active = active.sum(dim=1, keepdim=True).clamp_min(1.0)
++        return (overlap.pow(2).sum(dim=1, keepdim=True) / n_active).mean()
++
++    def _auxk_loss(self, residual_BD: t.Tensor, post_relu_BF: t.Tensor) -> t.Tensor:
++        """Revive dead mono latents to reconstruct the mono residual (OpenAI/BatchTopK form)."""
++        dead = self.num_tokens_since_fired >= self.dead_feature_threshold
++        self.dead_features = int(dead.sum())
++        if dead.sum() == 0:
++            return t.tensor(0.0, dtype=residual_BD.dtype, device=residual_BD.device)
++        k_aux = min(self.top_k_aux, int(dead.sum()))
++        auxk_latents = t.where(dead[None], post_relu_BF, -t.inf)
++        vals, idx = auxk_latents.topk(k_aux, sorted=False)
++        buf = t.zeros_like(post_relu_BF).scatter_(-1, idx, vals)
++        recon_aux = self.ae.decoder(buf)                          # no bias (matches baseline)
++        l2_aux = (residual_BD.float() - recon_aux.float()).pow(2).sum(dim=-1).mean()
++        mu = residual_BD.mean(dim=0)[None, :].broadcast_to(residual_BD.shape)
++        denom = (residual_BD.float() - mu.float()).pow(2).sum(dim=-1).mean()
++        return (l2_aux / denom).nan_to_num(0.0)
++
++    def _jump_l0_penalty(self, post_relu_BF: t.Tensor) -> t.Tensor:
++        """Differentiable L0 penalty for jump_relu mode (sparsity_penalty · mean L0)."""
++        l0 = _StepFunction.apply(
++            post_relu_BF, self.ae.jump_log_threshold, self.ae.bandwidth
++        ).sum(dim=-1).mean()
++        return self.sparsity_penalty * l0
++
++    def loss(self, x: t.Tensor, step: int = None, logging: bool = False):
++        in_warmup = step is not None and step < self.dual_warmup_steps
++        self.in_warmup = bool(in_warmup)
++
++        z, post_relu = self.ae.encode(x, return_pre=True)        # mono code + pre-sparsify acts
++        xM = self.ae.decode(z)
++
++        if in_warmup:
++            # Phase 1: mono branch alone learns to reconstruct (poly frozen in update()).
++            x_hat = xM
++            decorr = t.tensor(0.0, device=x.device)
++            r_hat = None
++        else:
++            # Phase 2: joint reconstruction + decorrelation.
++            r_hat = self.ae.poly(x - xM)
++            x_hat = xM + r_hat
++            decorr = self.decorr_coef * self._decorr_loss(r_hat, z)
++
++        l2_loss = (x - x_hat).pow(2).sum(dim=-1).mean()
++
++        # Dead-feature bookkeeping on the mono code.
++        did_fire = (z != 0).any(dim=0)
++        self.num_tokens_since_fired += x.size(0)
++        self.num_tokens_since_fired[did_fire] = 0
++        self.effective_l0 = float((z != 0).float().sum(dim=-1).mean().item())
++
++        # AuxK on the MONO residual (revives dead latents to capture mono-missed signal).
++        auxk = (
++            self._auxk_loss((x - xM).detach(), post_relu)
++            if self.auxk_alpha > 0 and self.sparsity_mode in ("topk", "batch_topk")
++            else t.tensor(0.0, device=x.device)
++        )
++        # JumpReLU explicit L0 penalty (its sparsity is not from a hard top-k).
++        jump_pen = (
++            self._jump_l0_penalty(post_relu)
++            if self.sparsity_mode == "jump_relu"
++            else t.tensor(0.0, device=x.device)
++        )
++
++        total = l2_loss + self.auxk_alpha * auxk + decorr + jump_pen
++
++        if not logging:
++            return total
++        return namedtuple("LossLog", ["x", "x_hat", "f", "losses"])(
++            x, x_hat, z,
++            {
++                "l2_loss": l2_loss.item(),
++                "auxk_loss": float(auxk.item()),
++                "decorr_loss": float(decorr.item()),
++                "jump_penalty": float(jump_pen.item()),
++                "loss": total.item(),
++            },
++        )
++
++    def update(self, step: int, x: t.Tensor):
++        if step == 0:
++            self.ae.b_dec.data = geometric_median(x).to(self.ae.b_dec.dtype)
++
++        # Two-stage gate: freeze the poly branch during warm-up, unfreeze after.
++        in_warmup = step < self.dual_warmup_steps
++        for p in self.ae.poly.parameters():
++            p.requires_grad = not in_warmup
++
++        x = x.to(self.device)
++        total = self.loss(x, step=step)
++        total.backward()
++
++        # Keep mono decoder columns near unit norm via projected gradient.
++        self.ae.decoder.weight.grad = remove_gradient_parallel_to_decoder_directions(
++            self.ae.decoder.weight, self.ae.decoder.weight.grad,
++            self.ae.activation_dim, self.ae.dict_size,
++        )
++        t.nn.utils.clip_grad_norm_(self.ae.parameters(), 1.0)
++        self.optimizer.step()
++        self.optimizer.zero_grad()
++        self.scheduler.step()
++        self.ae.decoder.weight.data = set_decoder_norm_to_unit_norm(
++            self.ae.decoder.weight, self.ae.activation_dim, self.ae.dict_size
++        )
++        return total.item()
++
++    @property
++    def config(self):
++        return {
++            "trainer_class": "DualSAETrainer",
++            "dict_class": "DualSAE",
++            "sparsity_mode": self.sparsity_mode,
++            "lr": self.lr,
++            "steps": self.steps,
++            "k": int(self.ae.k.item()),
++            "poly_hidden": self.ae.poly_hidden,
++            "decorr_coef": self.decorr_coef,
++            "dual_warmup_steps": self.dual_warmup_steps,
++            "auxk_alpha": self.auxk_alpha,
++            "sparsity_penalty": self.sparsity_penalty,
++            "bandwidth": self.ae.bandwidth,
++            "warmup_steps": self.warmup_steps,
++            "decay_start": self.decay_start,
++            "seed": self.seed,
++            "activation_dim": self.ae.activation_dim,
++            "dict_size": self.ae.dict_size,
++            "device": self.device,
++            "layer": self.layer,
++            "lm_name": self.lm_name,
++            "wandb_name": self.wandb_name,
++            "submodule_name": self.submodule_name,
++        }
+diff --git a/sae_to_topic.py b/sae_to_topic.py
+index c861d95..4f674ee 100644
+--- a/sae_to_topic.py
++++ b/sae_to_topic.py
+@@ -4,7 +4,7 @@ import torch
+ import argparse
+ import numpy as np
+ import pandas as pd
+-import gensim.downloader as api
++from gensim.models import KeyedVectors  # offline loader; replaces gensim.downloader.api (no network)
+ import logging # Added import
+ 
+ from tqdm import tqdm
+@@ -117,15 +117,30 @@ if __name__ == "__main__":
+     parser.add_argument("--topic-embedding-sparsity", type=float, default=0.9)
+     parser.add_argument("--num-clusters", type=int, default=100)
+     parser.add_argument("--save-path", type=str, required=True)
++    parser.add_argument("--w2v-path", type=str, default=None,
++                        help="Path to a local word2vec binary (.gz). Defaults to $W2V_PATH or "
++                             "./assets/gensim-data. No download — pre-fetch via prepare_assets.sh.")
+     args = parser.parse_args()
+ 
+     path_to_sae_results = args.sae_results_path
+ 
+     logging.info(f"Script started with arguments: {args}")
+ 
+-    # Load word2vec embeddings
+-    logging.info("Loading 'word2vec-google-news-300' embeddings...")
+-    embeddings = api.load("word2vec-google-news-300")
++    # Load word2vec embeddings from a LOCAL pre-downloaded file (offline; no api.load,
++    # which would hit the network). The path defaults to the gensim cache under ./assets;
++    # override with --w2v-path or the W2V_PATH env var. Run prepare_assets.sh first to
++    # download this file.
++    w2v_path = args.w2v_path or os.environ.get(
++        "W2V_PATH",
++        "./assets/gensim-data/word2vec-google-news-300/word2vec-google-news-300.gz",
++    )
++    logging.info(f"Loading word2vec (offline) from {w2v_path} ...")
++    if not os.path.isfile(w2v_path):
++        raise FileNotFoundError(
++            f"word2vec file not found: {w2v_path}. Run prepare_assets.sh first."
++        )
++    # binary=True: the google-news .gz is the binary word2vec format.
++    embeddings = KeyedVectors.load_word2vec_format(w2v_path, binary=True)
+     mean_embedding = embeddings.get_mean_vector(embeddings.key_to_index.keys())
+     logging.info("Finished loading word2vec embeddings.")
+ 
+@@ -239,14 +254,20 @@ if __name__ == "__main__":
+         valid_feature_idx[k].item(): label for k, label in enumerate(kmeans.labels_.tolist())
+     }
+ 
+-    logging.info("Calculating cluster document coverage (this may take a while)...")
+-    cluster_counts = defaultdict(set)
+-
+-    for idx, feature_idx in tqdm(zip(*theta.nonzero()), total=theta.nnz, desc="Counting doc coverage"):
+-        idx = idx.item()
+-        feature_idx = feature_idx.item()
+-        if feature_idx in feature_idx_to_cluster:
+-            cluster_counts[feature_idx_to_cluster[feature_idx]].add(idx)
++    logging.info("Calculating cluster document coverage (vectorized)...")
++    # Coverage[k] = #docs with >=1 nonzero activation among cluster k's features.
++    # The original implementation looped over theta.nonzero() in pure Python (O(nnz) with a .item()
++    # + set.add per entry). For dense activations (JumpReLU / DualJumpReLU) at N=125K that is ~735M
++    # iterations and stalls/gets killed. Equivalent one-shot computation: build the feature->cluster
++    # one-hot M (valid features only) and aggregate theta @ M (N x C, all >=0 since SAE acts are >=0);
++    # a doc d is covered by cluster k iff (theta @ M)[d, k] > 0. This is O(nnz) in C — seconds.
++    _cov_M = csr_matrix(
++        (np.ones(len(kmeans.labels_), dtype=np.float32),
++         (valid_feature_idx.cpu().numpy(), kmeans.labels_)),
++        shape=(theta.shape[1], args.num_clusters),
++    )
++    _covered = np.asarray((theta.dot(_cov_M) > 0).sum(axis=0)).ravel()  # per-cluster covered-doc count
++    cluster_counts = {k: int(c) for k, c in enumerate(_covered)}
+     logging.info("Finished calculating document coverage.")
+ 
+     cluster_records = []
+@@ -257,7 +278,7 @@ if __name__ == "__main__":
+             "cluster_size": len(cluster_to_feature_indices[k]), # Use new name
+             "cluster_prob": cluster_total_probs[k], # Use new name
+             "cluster_words": cluster_to_top_words[k], # Use new name
+-            "cluster_ratio": len(cluster_counts[k]) / total
++            "cluster_ratio": cluster_counts.get(k, 0) / total
+         })
+ 
+     cluster_df = pd.DataFrame(cluster_records)
