@@ -2,6 +2,12 @@
 
 Code for the anonymous submission *"Separating Interpretability and Reconstruction in Sparse Autoencoders"*.
 
+<p align="center">
+  <img src="figures/dualsae_architecture.jpg" alt="DualSAE architecture" width="90%">
+</p>
+
+<p align="center"><em><b>DualSAE architecture.</b> The Sparse Branch, a standard SAE, captures the semantic information of the input feature <code>x</code> in the sparse latent <code>z</code> and projects it back as <code>x^M</code>; the Residual Branch captures the non-semantic information <code>r_hat</code>. The final reconstruction is <code>x_hat = x^M + r_hat</code>.</em></p>
+
 DualSAE augments a standard sparse autoencoder with a plug-in **Residual Branch**:
 
 - the **Sparse Branch** is an ordinary SAE (TopK, BatchTopK, JumpReLU, Matryoshka, Gated, or CB-SAE) that maps an embedding `x` to a sparse code `z` and reconstructs `x^M = W_D z + b_D`;
