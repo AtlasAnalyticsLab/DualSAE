@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DualSAE: Separating Interpretability and Reconstruction in Sparse Autoencoders</title>
+<meta name="description" content="DualSAE augments sparse autoencoders with a plug-in Residual Branch to separate interpretability from reconstruction fidelity.">
+<meta property="og:title" content="DualSAE: Separating Interpretability and Reconstruction in Sparse Autoencoders">
+<meta property="og:description" content="A plug-in Residual Branch that separates interpretability from reconstruction in sparse autoencoders.">
+<meta property="og:image" content="static/img/architecture.jpg">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='6' width='14' height='14' rx='3' fill='none' stroke='%238f98c8' stroke-width='3'/%3E%3Crect x='6' y='25' width='14' height='14' rx='3' fill='%236f9bff'/%3E%3Crect x='6' y='44' width='14' height='14' rx='3' fill='none' stroke='%238f98c8' stroke-width='3'/%3E%3Crect x='44' y='6' width='14' height='14' rx='3' fill='%23f4c4cf'/%3E%3Crect x='44' y='25' width='14' height='14' rx='3' fill='%23df6f8e'/%3E%3Crect x='44' y='44' width='14' height='14' rx='3' fill='%23eeb0c0'/%3E%3Ccircle cx='32' cy='32' r='8' fill='%23d9668c'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400;1,600&family=Lato:wght@400;700;900&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+<script>
+window.MathJax = { tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] }, svg: { fontCache: 'global' } };
+</script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-svg.min.js"></script>
+<style>
+:root{
+  --bg:#F9FAFD; --panel:#EEF1FA; --card:#FFFFFF; --ink:#1B2140; --muted:#5A6283; --rule:#DDE2F0;
+  --primary:#3657D6; --primary-soft:#DFE6FF; --pink:#C8476F; --pink-soft:#FBE2EA;
+  --sae:#3F7FC4; --dual:#E0731F; --link:#AAB2C8; --grid:#E4E8F3;
+  --g1:#3657D6; --g2:#7C6BE0; --g3:#D9668C; --glow:rgba(54,87,214,.18); --shine:rgba(255,255,255,.85);
+  --btn-bg:#FFFFFF; --btn-fg:#1B2140; --btn-line:#B9C5F2;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#11152B; --panel:#1A2042; --card:#F4F6FB; --ink:#EDF0FA; --muted:#A5ACCE; --rule:#2E3560;
+    --primary:#8FA6FF; --primary-soft:#263063; --pink:#F08BAE; --pink-soft:#4A2140;
+    --sae:#79AEE8; --dual:#F59A55; --link:#4A5280; --grid:#2A3159;
+    --g1:#8FA6FF; --g2:#B7A6FF; --g3:#F08BAE; --glow:rgba(143,166,255,.35); --shine:rgba(255,255,255,.95);
+    --btn-bg:#1F2650; --btn-fg:#EDF0FA; --btn-line:#3D4789;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#11152B; --panel:#1A2042; --card:#F4F6FB; --ink:#EDF0FA; --muted:#A5ACCE; --rule:#2E3560;
+  --primary:#8FA6FF; --primary-soft:#263063; --pink:#F08BAE; --pink-soft:#4A2140;
+  --sae:#79AEE8; --dual:#F59A55; --link:#4A5280; --grid:#2A3159;
+  --g1:#8FA6FF; --g2:#B7A6FF; --g3:#F08BAE; --glow:rgba(143,166,255,.35); --shine:rgba(255,255,255,.95);
+  --btn-bg:#1F2650; --btn-fg:#EDF0FA; --btn-line:#3D4789;
+  color-scheme: dark;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:64px}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 18px/1.7 "Spectral",Georgia,serif;-webkit-font-smoothing:antialiased;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav,button,table,figcaption,.btn,.cap,summary,.authors,.affil,.venue,.chart-note{font-family:"Lato",system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--primary)}
+.col{max-width:900px;margin:0 auto;padding:0 20px}
+img{max-width:100%;height:auto;display:block}
+
+nav{position:sticky;top:0;z-index:10;background:var(--bg);background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-bottom:1px solid var(--rule);padding-top:env(safe-area-inset-top,0px)}
+nav .col{display:flex;justify-content:center;gap:22px;height:48px;align-items:center;font-size:14px;overflow-x:auto}
+nav a{color:var(--muted);text-decoration:none;white-space:nowrap}
+nav a:hover{color:var(--ink)}
+
+header{text-align:center;padding:52px 0 8px}
+.lockup{display:inline-flex;align-items:center;gap:.26em;font-size:clamp(3rem,9.5vw,5.4rem);margin:0 0 14px}
+.logo{width:1.25em;height:1.25em;flex:none;overflow:visible;filter:drop-shadow(0 0 .16em var(--glow))}
+.logo .sq{transform-box:fill-box;transform-origin:center;animation:pop .45s cubic-bezier(.3,1.6,.5,1) both;animation-delay:calc(var(--k) * 60ms + 120ms)}
+.logo .ln{stroke-dasharray:60;stroke-dashoffset:60;animation:draw .5s ease-out .55s forwards}
+.logo .hub{transform-box:fill-box;transform-origin:center;animation:pop .55s cubic-bezier(.3,1.6,.5,1) .5s both}
+@keyframes pop{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes draw{to{stroke-dashoffset:0}}
+@media (prefers-reduced-motion: reduce){.logo .sq,.logo .hub,.logo .ln,.name{animation:none!important;stroke-dashoffset:0}}
+.name{font:italic 600 1em/1 "Spectral",serif;margin:0;padding:.04em .12em .1em .02em;letter-spacing:-.01em;color:var(--primary);
+  background:linear-gradient(110deg,transparent 38%,var(--shine) 50%,transparent 62%) 160% 0/250% 100% no-repeat,
+             linear-gradient(95deg,var(--g1) 0%,var(--g2) 50%,var(--g3) 100%);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:shine 7s ease-in-out 1.2s infinite}
+@keyframes shine{0%{background-position:160% 0,0 0}28%,100%{background-position:-60% 0,0 0}}
+h1{font-weight:500;font-size:clamp(1.4rem,3.4vw,2.05rem);line-height:1.25;margin:0 auto 20px;max-width:34ch;text-wrap:balance}
+.authors{font-size:16.5px;line-height:1.8;margin:0 auto 6px;max-width:48ch}
+.authors span{white-space:nowrap;margin:0 8px}
+.authors a{color:inherit;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--primary) 50%,transparent);text-decoration-thickness:1.5px;text-underline-offset:4px}
+.authors a:hover,.authors a:focus-visible{color:var(--primary);text-decoration-color:var(--primary)}
+.authors sup{font-size:.68em;color:var(--muted)}
+.affil{font-size:13.5px;line-height:1.6;color:var(--muted);margin:0 auto 4px;max-width:62ch}
+.venue{display:inline-block;font-weight:700;font-size:15px;color:var(--primary);background:var(--primary-soft);padding:6px 16px;border-radius:999px;margin:14px 0 22px}
+.btns{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;font-size:14.5px;font-weight:700;padding:9px 18px;border-radius:999px;background:var(--btn-bg);color:var(--btn-fg);
+  border:1.5px solid var(--btn-line);text-decoration:none;transition:background .2s,color .2s,border-color .2s}
+.btn:hover,.btn:focus-visible{background:var(--primary);border-color:var(--primary);color:#fff}
+.btn svg{width:16px;height:16px;fill:none;stroke:var(--primary);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.btn:hover svg,.btn:focus-visible svg{stroke:#fff}
+
+section{padding:64px 0 0}
+h2{font:700 1.8rem/1.2 "Lato",sans-serif;margin:0 0 18px;text-align:center}
+h3{font:700 1.12rem/1.3 "Lato",sans-serif;margin:38px 0 8px}
+p{margin:0 0 14px}
+.tldr{background:var(--panel);border-radius:14px;padding:22px 26px;font-size:1.03rem;border-left:4px solid var(--primary)}
+.tldr p:last-child{margin:0}
+.card{background:var(--card);border-radius:12px;padding:14px;border:1px solid var(--rule)}
+figure{margin:22px 0 0}
+.cap,figcaption{font-size:14px;line-height:1.55;color:var(--muted);text-align:center;margin:12px auto 0;max-width:74ch}
+.cap b,figcaption b{color:var(--ink);font-weight:700}
+.eq{overflow-x:auto;overflow-y:hidden;padding:4px 0;margin:10px 0 16px;text-align:center}
+mjx-container{color:var(--ink)}
+.eq mjx-container{font-size:112%}
+@media (max-width:520px){.eq mjx-container{font-size:92%}}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start}
+@media (max-width:720px){.two{grid-template-columns:1fr}}
+.pill-row{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin:18px 0 6px}
+.toggle{display:inline-flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:999px;background:var(--panel);border:1px solid var(--rule)}
+.toggle button{border:0;background:transparent;color:var(--muted);font-size:13.5px;font-weight:700;padding:6px 13px;border-radius:999px;cursor:pointer}
+.toggle button[aria-pressed="true"]{background:var(--btn-bg);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.toggle button:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+
+/* dumbbell chart */
+.chart{position:relative;margin-top:10px}
+.chart svg{width:100%;height:auto;display:block;overflow:visible}
+.chart .axis text,.chart .lbl{font:13px "Lato",sans-serif;fill:var(--muted)}
+.chart .fam{font:700 14px "Lato",sans-serif;fill:var(--ink)}
+.chart .delta{font:700 13px "Lato",sans-serif;fill:var(--ink)}
+.chart .gridline{stroke:var(--grid);stroke-width:1}
+.chart .row:hover .hit,.chart .row:focus .hit{fill:var(--panel)}
+.chart .row:focus{outline:none}
+.chart .hit{fill:transparent}
+.legend{display:flex;justify-content:center;gap:18px;flex-wrap:wrap;font:14px "Lato",sans-serif;color:var(--muted);margin-top:6px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.chart-note{font-size:14.5px;text-align:center;margin:8px 0 0;color:var(--ink)}
+.tip{position:absolute;pointer-events:none;background:var(--btn-bg);color:var(--ink);border:1px solid var(--rule);border-radius:8px;padding:8px 10px;
+  font:13px/1.45 "Lato",sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.14);opacity:0;transition:opacity .12s;white-space:nowrap;z-index:3}
+
+.tw{overflow-x:auto;margin-top:14px}
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th,td{padding:7px 10px;text-align:center;border-bottom:1px solid var(--rule);white-space:nowrap}
+th{font-weight:700;color:var(--ink);border-bottom:2px solid var(--rule)}
+td:first-child,th:first-child{text-align:left}
+tr.ours td{background:color-mix(in srgb,var(--primary-soft) 55%,transparent)}
+tr.grp td{font-weight:700;color:var(--muted);background:var(--panel);text-align:left}
+td .sd{font-size:.78em;color:var(--muted);margin-left:2px}
+
+pre.code,pre.bib{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:16px 18px;overflow-x:auto;
+  font:13.5px/1.6 "IBM Plex Mono",ui-monospace,Menlo,monospace;color:var(--ink);margin:12px 0 0}
+.bibwrap{position:relative}
+.copy{position:absolute;top:10px;right:10px;font:700 12.5px "Lato",sans-serif;padding:6px 12px;border-radius:999px;border:1.5px solid var(--btn-line);
+  background:var(--btn-bg);color:var(--btn-fg);cursor:pointer}
+.copy:hover{border-color:var(--primary)}
+footer{margin:70px 0 0;padding:26px 0 40px;border-top:1px solid var(--rule);text-align:center;font:13.5px/1.6 "Lato",sans-serif;color:var(--muted)}
+</style>
+</head>
+<body>
+<nav aria-label="Sections"><div class="col">
+<a href="#abstract">Abstract</a><a href="#motivation">Motivation</a><a href="#method">Method</a><a href="#results">Results</a><a href="#language">Language</a><a href="#applications">Applications</a><a href="#code">Code</a><a href="#bibtex">BibTeX</a>
+</div></nav>
+
+<main class="col">
+<header>
+  <div class="lockup">
+    <svg class="logo" viewBox="0 0 120 120" aria-hidden="true">
+      <g fill="none" stroke-width="3.2">
+        <rect class="sq" style="--k:0" x="8"  y="6"  width="22" height="15" rx="4" stroke="#8f98c8"/>
+        <rect class="sq" style="--k:1" x="8"  y="25" width="22" height="15" rx="4" fill="#6f9bff" stroke="none"/>
+        <rect class="sq" style="--k:2" x="8"  y="44" width="22" height="15" rx="4" stroke="#8f98c8"/>
+        <rect class="sq" style="--k:3" x="8"  y="63" width="22" height="15" rx="4" stroke="#8f98c8"/>
+        <rect class="sq" style="--k:4" x="8"  y="82" width="22" height="15" rx="4" fill="#9ed0ff" stroke="none"/>
+        <rect class="sq" style="--k:5" x="8"  y="101" width="22" height="15" rx="4" stroke="#8f98c8"/>
+      </g>
+      <g stroke="none">
+        <rect class="sq" style="--k:6"  x="90" y="6"   width="22" height="15" rx="4" fill="#f4c4cf"/>
+        <rect class="sq" style="--k:7"  x="90" y="25"  width="22" height="15" rx="4" fill="#e88ea6"/>
+        <rect class="sq" style="--k:8"  x="90" y="44"  width="22" height="15" rx="4" fill="#f7d6de"/>
+        <rect class="sq" style="--k:9"  x="90" y="63"  width="22" height="15" rx="4" fill="#df6f8e"/>
+        <rect class="sq" style="--k:10" x="90" y="82"  width="22" height="15" rx="4" fill="#eeb0c0"/>
+        <rect class="sq" style="--k:11" x="90" y="101" width="22" height="15" rx="4" fill="#f2c0cc"/>
+      </g>
+      <path class="ln" d="M34 61 H86" stroke="#7d86b8" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      <g class="hub"><circle cx="60" cy="61" r="13" fill="#d9668c"/><path d="M53 61h14M60 54v14" stroke="#fff" stroke-width="3.6" stroke-linecap="round"/></g>
+    </svg>
+    <p class="name">DualSAE</p>
+  </div>
+  <h1>Separating Interpretability and Reconstruction in Sparse Autoencoders</h1>
+  <p class="authors">
+    <span><a href="https://anhtienng.github.io/" target="_blank" rel="noopener">Anh Tien Nguyen</a><sup>1</sup></span>
+    <span><a href="https://www3.cs.stonybrook.edu/~samaras/" target="_blank" rel="noopener">Dimitris Samaras</a><sup>1,&dagger;</sup></span>
+    <span><a href="https://atlasanalyticslab.github.io/" target="_blank" rel="noopener">Mahdi S. Hosseini</a><sup>2,3,&dagger;</sup></span>
+  </p>
+  <p class="affil"><sup>1</sup>Stony Brook University &nbsp; <sup>2</sup>Concordia University &nbsp; <sup>3</sup>Mila&ndash;Quebec AI Institute<br><sup>&dagger;</sup>Equal senior authorship</p>
+  <p class="venue">arXiv preprint, 2026</p>
+  <div class="btns">
+    <a class="btn" href="https://arxiv.org/abs/2611.25165"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>Paper</a>
+    <a class="btn" href="https://arxiv.org/pdf/2611.25165"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>PDF</a>
+    <a class="btn" href="https://github.com/AtlasAnalyticsLab/DualSAE"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg>Code</a>
+    <a class="btn" href="#bibtex"><svg viewBox="0 0 24 24"><path d="M7 7h4v4H7zM13 7h4v4h-4zM9 11c0 3-1 5-3 6M15 11c0 3-1 5-3 6"/></svg>BibTeX</a>
+  </div>
+</header>
+
+<section id="abstract">
+  <h2>Abstract</h2>
+  <div class="tldr">
+    <p>Sparse Autoencoders (SAEs) are effective tools for mechanistic interpretability by decomposing neural representations into sparse and interpretable features. However, a single sparse representation in traditional SAEs is responsible for both reconstruction fidelity and interpretability, which are not guaranteed to align. To separate these objectives, we propose <b>DualSAE</b>, a modular framework that augments standard SAEs with a plug-in Residual Branch. A standard SAE serves as the <i>Sparse Branch</i>, learning a sparse code that contains the dominant semantics of the input. The added <i>Residual Branch</i> models the non-semantic information omitted by the Sparse Branch. We ensure that the contributions of the two branches towards the overall reconstruction have minimal overlap through a decorrelation loss. We also adopt a two-stage training strategy that first stabilizes sparse representation learning before coupling with the Residual Branch. Across diverse encoder&ndash;SAE configurations on two vision datasets and two language corpora, DualSAE achieves mean relative improvements of approximately 29% in reconstruction fidelity and 34% in interpretability (measured by monosemanticity score). Moreover, with more interpretable representations, DualSAE yields consistent performance gains in the downstream applications of topic modeling, hypothesis generation, and LLM steering. Qualitative analysis further suggests that the Sparse Branch indeed preserves dominant semantic content, whereas the Residual Branch captures non-semantic information to improve reconstruction fidelity.</p>
+  </div>
+  <figure>
+    <div class="card"><img src="static/img/teaser.jpg" alt="Standard SAE versus DualSAE: one sparse code for semantics and non-semantics versus a sparse code for semantics plus a non-semantic residual branch" loading="lazy"></div>
+    <figcaption><b>Standard SAE and DualSAE.</b> (a) A standard SAE encodes both dominant semantic concepts and non-semantic information into a single sparse code, entangling interpretability with reconstruction. (b) DualSAE disentangles these objectives by adding a non-semantic Residual Branch, which separates interpretability from the overall reconstruction objective.</figcaption>
+  </figure>
+</section>
+
+<section id="motivation">
+  <h2>Motivation</h2>
+  <p>Let \(x\) be an image embedding, \(\hat{x}\) its SAE reconstruction, and \(r = x - \hat{x}\) the residual. Does \(\hat{x}\) mostly carry the <i>semantic</i> information, the part shared by inputs of the same concept, while the <i>non-semantic</i> information stays in \(r\)? We test this with a BatchTopK SAE on CLIP embeddings of ImageNet-1K: each validation image queries its 50 nearest neighbors using \(\hat{x}\) (or \(r\)), and <b>class purity</b> is the fraction of retrieved images from the query's class.</p>
+  <figure>
+    <div class="card"><img src="static/img/motivation.jpg" alt="Histogram of class purity for retrievals with the reconstruction and the residual, and example retrievals for a dog query" loading="lazy"></div>
+    <figcaption><b>Reconstruction vs. residual.</b> Left: retrievals with the reconstruction \(\hat{x}\) are substantially purer than those with the residual \(r\). Right: for the same query image, \(\hat{x}\) retrieves semantically consistent samples, while \(r\) retrieves unrelated ones.</figcaption>
+  </figure>
+  <p style="margin-top:18px">The sparse reconstruction keeps the dominant semantic structure, while the residual retains information that is weakly tied to semantic class identity. DualSAE therefore separates these two kinds of information instead of forcing them into a single sparse representation.</p>
+</section>
+
+<section id="method">
+  <h2>Method</h2>
+  <figure>
+    <div class="card"><img src="static/img/architecture.jpg" alt="DualSAE architecture: a frozen vision model, the Sparse Branch (encoder, sparse code, decoder) and the Residual Branch (projector on the residual), summed into the reconstruction" loading="lazy"></div>
+    <figcaption><b>DualSAE architecture.</b> The Sparse Branch, a standard SAE, captures the semantic information of the input feature \(x\) in the sparse latent \(z\) and projects it back as \(x^M\). The Residual Branch captures the non-semantic information \(\hat{r}\). The final reconstruction combines both branches: \(\hat{x} = x^M + \hat{r}\).</figcaption>
+  </figure>
+
+  <h3>Sparse Branch</h3>
+  <p>The Sparse Branch is a standard SAE with any sparsification rule \(S(\cdot)\), such as TopK, BatchTopK or JumpReLU. It maps the input to an overcomplete sparse code and reconstructs the dominant semantic content:</p>
+  <div class="eq">\[ z = S(W_E\,x + b_E), \qquad x^M = W_D\,z + b_D . \]</div>
+
+  <h3>Residual Branch</h3>
+  <p>We do not require \(x^M\) to reconstruct everything in \(x\): some of \(x\) is non-semantic information that sparse, interpretable features should not have to learn. A Residual Branch reads the residual through a projector \(W_P\) and a nonlinearity \(Q\), and the two branches are added:</p>
+  <div class="eq">\[ r = x - x^M, \qquad \hat{r} = Q(W_P\, r), \qquad \hat{x} = x^M + \hat{r} . \]</div>
+
+  <h3>Decorrelation loss</h3>
+  <p>A Residual Branch alone could learn \(\hat{r} = r\) and overwrite information that the active sparse features already represent. Let \(D_x = W_D[:, \mathcal{A}(x)]\) hold the decoder directions of the latents active for \(x\). We penalize the component of \(\hat{r}\) in their span, and train with</p>
+  <div class="eq">\[ \mathcal{L} = \underbrace{\lVert x - \hat{x} \rVert_2^2}_{\mathcal{L}_{\mathrm{rec}}} + \lambda\,\mathcal{L}_{\mathrm{sparse}} + \gamma\,\underbrace{\lVert D_x^\top \hat{r} \rVert_2^2}_{\mathcal{L}_{\mathrm{dcor}}} . \]</div>
+  <p>At the identity solution \(\hat{r} = r\), the gradient of this objective with respect to \(\hat{r}\) is \(2\gamma\, D_x D_x^\top r\), which is non-zero whenever the residual has components along the active decoder directions, so the Residual Branch cannot simply copy them. Hard-sparsity SAEs (TopK, BatchTopK) do not use \(\mathcal{L}_{\mathrm{sparse}}\).</p>
+
+  <h3>Two-stage training</h3>
+  <p>The Sparse Branch is first trained alone as a standard SAE (warm-up), which stabilizes sparse representation learning; then both branches are trained jointly.</p>
+  <figure>
+    <div class="card"><img src="static/img/warmup.png" alt="Validation R-squared and MonoScore over training epochs for warm-up lengths of 0, 2500, 5000 and 7500 steps" loading="lazy"></div>
+    <figcaption><b>Effect of warm-up length</b> on reconstruction \(R^2\) (left) and MonoScore (right) during ImageNet-1K training. Shorter warm-up accelerates reconstruction gains; moderate warm-up improves monosemanticity; excessive warm-up delays reconstruction gains without further improving MonoScore.</figcaption>
+  </figure>
+</section>
+
+<section id="results">
+  <h2>Results</h2>
+  <h3>DualSAE vs. SAE across encoders, SAE families and datasets</h3>
+  <p>We pair six SAE families (TopK, BatchTopK, JumpReLU, MatryoshkaSAE, GatedSAE and CB-SAE) with their DualSAE counterparts on three vision encoders (CLIP, SigLIP2 and ViT-L/16) and two datasets, and measure reconstruction \(R^2\), MonoScore (MS), class purity, and KNN and linear-probe (LP) performance. On <b>ImageNet-1K</b>, DualSAE is higher than its SAE counterpart on all five metrics in all 18 encoder&ndash;SAE pairs. On <b>OpenImagesV7</b>, it is higher in all 18 pairs for \(R^2\), purity and KNN, in 16 for MonoScore and in 14 for LP.</p>
+  <div class="pill-row">
+    <div class="toggle" role="group" aria-label="Dataset" id="t-ds"></div>
+    <div class="toggle" role="group" aria-label="Encoder" id="t-enc"></div>
+  </div>
+  <div class="pill-row" style="margin-top:4px">
+    <div class="toggle" role="group" aria-label="Metric" id="t-met"></div>
+  </div>
+  <div class="legend" aria-hidden="true">
+    <span><svg width="14" height="14"><circle cx="7" cy="7" r="5.5" fill="var(--sae)"/></svg>Standard SAE</span>
+    <span><svg width="18" height="18" viewBox="-9 -9 18 18"><path d="M0.00 -8.00L2.00 -2.75L7.61 -2.47L3.23 1.05L4.70 6.47L0.00 3.40L-4.70 6.47L-3.23 1.05L-7.61 -2.47L-2.00 -2.75Z" fill="var(--dual)"/></svg>DualSAE</span>
+  </div>
+  <div class="chart" id="chart"><svg id="chart-svg" role="img" aria-labelledby="chart-title"><title id="chart-title">DualSAE versus standard SAE</title></svg><div class="tip" id="tip"></div></div>
+  <p class="chart-note" id="chart-note"></p>
+  <p class="cap">Mean over three seeds (hover a row for mean &plusmn; standard deviation). KNN and LP are top-1 accuracy on ImageNet-1K and micro-F1 on OpenImagesV7. Values from the supplementary table <i>Comparison of SAE variants across vision encoders</i>.</p>
+
+  <figure>
+    <div class="pill-row" style="margin:0 0 10px"><div class="toggle" role="group" aria-label="Radar dataset" id="t-radar"></div></div>
+    <div class="card"><img id="radar-img" src="static/img/radar_imagenet.png" alt="Radar plots comparing each SAE with its DualSAE counterpart for three encoders and six SAE families" loading="lazy"></div>
+    <figcaption id="radar-cap"><b>Radar view</b> of the same comparison: each panel overlays an SAE (blue) and its DualSAE counterpart (orange) on \(R^2\), MonoScore, class purity, KNN and LP, for three encoders (rows) and six SAE families (columns).</figcaption>
+  </figure>
+
+  <h3>More interpretable sparse latents</h3>
+  <figure>
+    <div class="card"><img src="static/img/matched_latents.jpg" alt="Top-activating images of two latents of BatchTopK and Dual-BatchTopK, and MonoScore and class purity curves over all latents" loading="lazy"></div>
+    <figcaption><b>Improved interpretability of sparse latents.</b> Left: for two latents at the same MonoScore rank, Dual-BatchTopK shows more coherent activating samples from high to low activations than BatchTopK. Right: MonoScore (top) and class purity (bottom) across all latents are consistently higher for DualSAE.</figcaption>
+  </figure>
+  <figure>
+    <div class="card"><img src="static/img/tsne.jpg" alt="t-SNE of sparse codes of 20 ImageNet classes for Dual-JumpReLU and JumpReLU" loading="lazy"></div>
+    <figcaption><b>t-SNE of sparse representations.</b> Sparse codes of 20 randomly selected ImageNet-1K classes: Dual-JumpReLU (left) forms better-separated local semantic neighborhoods than JumpReLU (right).</figcaption>
+  </figure>
+
+  <h3>Joint training matters, not just extra capacity</h3>
+  <div class="two">
+    <figure style="margin-top:6px">
+      <div class="card"><img src="static/img/joint_vs_seq.png" alt="MonoScore against R-squared for SAE, SAE plus Residual and DualSAE on three encoders" loading="lazy"></div>
+      <figcaption><b>DualSAE vs. SAE + Residual</b> (BatchTopK, ImageNet-1K). Freezing a pretrained SAE and training only a Residual Branch improves \(R^2\) by 15.4&ndash;24.8%; DualSAE, which optimizes both branches jointly, further improves MonoScore by 10.5&ndash;43.3% at comparable or higher \(R^2\).</figcaption>
+    </figure>
+    <figure style="margin-top:6px">
+      <div class="card"><img src="static/img/expansion.png" alt="R-squared and MonoScore of SAE and DualSAE at expansion ratios 4, 8 and 16 for three encoders" loading="lazy"></div>
+      <figcaption><b>Effect of the expansion ratio</b> (BatchTopK, ImageNet-1K). DualSAE has higher \(R^2\) (top) and MonoScore (bottom) than the standard SAE at every expansion ratio (&times;4, &times;8, &times;16) for all three encoders.</figcaption>
+    </figure>
+  </div>
+
+  <h3>The decorrelation loss separates the branches</h3>
+  <figure>
+    <div class="card"><img src="static/img/span_ablation.jpg" alt="Nearest-neighbor retrievals from the sparse reconstruction and the residual, with and without the decorrelation loss" loading="lazy"></div>
+    <figcaption><b>Effect of the decorrelation loss.</b> For the same query image, nearest-neighbor retrievals from the sparse reconstruction \(x^M\) and the residual \(\hat{r}\), without (top) and with (bottom) the loss. The loss keeps \(x^M\) retrievals coherent while making \(\hat{r}\) retrievals less similar to the query.</figcaption>
+  </figure>
+</section>
+
+<section id="language">
+  <h2>Language representations</h2>
+  <p>DualSAE is not specific to vision. We train SAEs and DualSAEs on residual-stream activations at layer 12 of Pythia-410M (deduplicated) on two different corpora, OpenWebText (OWT) and GitHub code (GHC). DualSAE improves all four metrics over its standard counterpart for every SAE variant on both corpora, while perturbing the language model much less (lower \(\Delta\)CE and KL when its reconstruction is spliced back into the model).</p>
+  <div class="tw">
+  <table>
+    <thead><tr><th>Method</th><th>&Delta;CE &darr;</th><th>KL &darr;</th><th>R<sup>2</sup> &uarr;</th><th>MS &uarr;</th></tr></thead>
+    <tbody id="lang-body"></tbody>
+  </table>
+  </div>
+  <p class="cap"><b>Language-model evaluation</b> at layer 12 of Pythia (mean with standard deviation over seeds). Rows with a tinted background are DualSAE.</p>
+  <figure>
+    <div class="card"><img src="static/img/language.png" alt="Left: time-related latents of Dual-TopK and TopK with their activating text. Right: generations without steering, with TopK steering and with Dual-TopK steering toward positive sentiment" loading="lazy"></div>
+    <figcaption><b>Qualitative analysis on language representations.</b> (a) &ldquo;Time-related&rdquo; latents of Dual-TopK and TopK: Dual-TopK responds more selectively to genuine time-related concepts, whereas TopK misses temporal concepts and fires on unrelated tokens. (b) Positive-sentiment steering: compared with the unsteered generation and TopK steering, Dual-TopK produces a coherent continuation with clear positive expressions.</figcaption>
+  </figure>
+</section>
+
+<section id="applications">
+  <h2>Downstream applications</h2>
+  <p>With more interpretable features, DualSAE also helps the applications that SAEs are used for.</p>
+  <h3>Topic modeling</h3>
+  <p>Each sparse feature can be viewed as a <i>topic atom</i>. Applying the SAE-TM pipeline to standard SAE features and to DualSAE's sparse features, DualSAE yields concrete labels for the dominant object, attribute or scene, whereas the standard SAE assigns topics from weak or spurious associations. On ImageNet-1K and OpenImagesV7, DualSAE's topics are more diverse in almost all configurations and easier for an LLM judge to verify (intruder accuracy) in most.</p>
+  <figure>
+    <div class="card"><img src="static/img/topic.jpg" alt="Five images with their dominant topic from DualSAE (top labels) and from the standard SAE (bottom labels)" loading="lazy"></div>
+    <figcaption><b>Image&ndash;topic assignment</b> (TopK on SigLIP2). Dominant topics from DualSAE (red) are visually grounded, e.g. <i>Shiny Metal Object</i> for a metal serving set, while those of the standard SAE (blue) are unrelated, e.g. <i>Ceramic Containers</i>.</figcaption>
+  </figure>
+  <h3>Hypothesis generation</h3>
+  <p>Following HypotheSAEs, we select the 16 latents most discriminative of each class, have a VLM describe each one as a hypothesis, and test on held-out images how many are significantly associated with the class and how well they predict it (AUROC). DualSAE yields more significant hypotheses in 17 of 18 configurations, and higher AUROC in all six JumpReLU configurations and at most 0.005 lower elsewhere.</p>
+  <figure>
+    <div class="card"><img src="static/img/hypothesis.jpg" alt="Top latent of JumpReLU and of Dual-JumpReLU for the bull mastiff class, with their hypotheses and five highest-activating images" loading="lazy"></div>
+    <figcaption><b>Hypothesis generation for <i>bull mastiff</i>.</b> The top latent of each model with its VLM hypothesis and five highest-activating images: JumpReLU's mixes unrelated scenes, whereas Dual-JumpReLU's (<i>large, muscular dogs</i>) is coherent and class-relevant.</figcaption>
+  </figure>
+  <h3>LLM steering</h3>
+  <p>Adding a latent's decoder direction to Pythia's residual stream steers generation toward its concept; panel (b) of the language figure above shows a positive-sentiment example. Quantitatively, following AxBench with 10 concepts (Amazon reviews, AG News and GoEmotions) and the steering strength calibrated to the same KL budget for every SAE, the standard SAE has a lower mean than DualSAE in all 80 comparisons (4 settings &times; 10 concepts &times; 2 metrics); after Benjamini&ndash;Hochberg correction, it is significantly worse in 33 and significantly better in none.</p>
+</section>
+
+<section id="code">
+  <h2>Code</h2>
+  <p>The <a href="https://github.com/AtlasAnalyticsLab/DualSAE">repository</a> contains the code for every experiment of the paper and its supplementary material, with a paper-to-code map. To train a Dual-BatchTopK SAE on CLIP features of ImageNet-1K:</p>
+<pre class="code">git clone https://github.com/AtlasAnalyticsLab/DualSAE.git &amp;&amp; cd DualSAE
+pip install -r vision/requirements.txt
+HF_HOME=./assets/hf DATA_ROOT=./data bash vision/prepare_assets.sh
+cd vision
+python extract_imagenet.py --model clip --split train
+python extract_imagenet.py --model clip --split validation
+python main.py --model dual --sparsity_mode batch_topk --dataset imagenet --extractor clip --seed 42 \
+    --decorrelation_coef 0.005 --warmup_steps 17500 --dead_check_interval 100 --lr 1e-4 \
+    --exp_name my_dual_btk --output_dir ./checkpoints</pre>
+</section>
+
+<section id="bibtex">
+  <h2>BibTeX</h2>
+  <div class="bibwrap">
+<pre class="bib" id="bib">@misc{nguyen2026separating,
+  title         = {Separating Interpretability and Reconstruction in Sparse Autoencoders},
+  author        = {Anh Tien Nguyen and Dimitris Samaras and Mahdi S. Hosseini},
+  year          = {2026},
+  eprint        = {2611.25165},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2611.25165}
+}</pre>
+    <button class="copy" type="button" id="copy-bib">Copy</button>
+  </div>
+</section>
+
+<footer>
+  Page design adapted from the <a href="https://sofiene-boutaj.github.io/omni/">OMNI</a> project page.
+</footer>
+</main>
+
+<script type="application/json" id="t5-data">[{"enc":"ViT","sae":"TK","vals":[[0.8081,0.0008,false],[0.2375,0.0011,false],[0.1271,0.0007,false],[0.8203,0.0011,false],[0.823,0.0006,false],[0.7037,0.0011,false],[0.1283,0.0007,false],[0.2259,0.0003,false],[0.4675,0.0011,false],[0.4022,0.0008,false]]},{"enc":"ViT","sae":"D-TK","vals":[[0.9661,0.0003,true],[0.4874,0.0008,true],[0.5666,0.0002,true],[0.8226,0.0008,true],[0.8239,0.0004,true],[0.9611,0.0006,true],[0.2446,0.0008,true],[0.5028,0.0001,true],[0.4701,0.001,true],[0.4049,0.0005,true]]},{"enc":"ViT","sae":"BTK","vals":[[0.7879,0.0007,false],[0.245,0.0009,false],[0.1513,0.0004,false],[0.8207,0.0005,false],[0.823,0.0005,false],[0.6782,0.0012,false],[0.1369,0.0008,false],[0.2569,0.0004,false],[0.4672,0.0013,false],[0.405,0.0009,true]]},{"enc":"ViT","sae":"D-BTK","vals":[[0.9725,0.0004,true],[0.4775,0.0005,true],[0.5481,0.0002,true],[0.8228,0.0003,true],[0.8242,0.0005,true],[0.9593,0.0006,true],[0.2708,0.0003,true],[0.5284,0.0002,true],[0.47,0.0006,true],[0.4035,0.0003,false]]},{"enc":"ViT","sae":"JR","vals":[[0.802,0.0007,false],[0.284,0.0008,false],[0.2391,0.0006,false],[0.8201,0.0008,false],[0.8221,0.0007,false],[0.7238,0.0008,false],[0.1075,0.0009,true],[0.2273,0.0004,false],[0.4675,0.0006,false],[0.4041,0.0007,true]]},{"enc":"ViT","sae":"D-JR","vals":[[0.9843,0.0003,true],[0.3576,0.0007,true],[0.424,0.0002,true],[0.8239,0.0006,true],[0.8239,0.0006,true],[0.9701,0.0006,true],[0.094,0.0003,false],[0.2863,0.0003,true],[0.4703,0.0003,true],[0.403,0.0003,false]]},{"enc":"ViT","sae":"MAT","vals":[[0.8273,0.0002,false],[0.2733,0.0017,false],[0.2233,0.0018,false],[0.8213,0.0002,false],[0.8233,0.0001,false],[0.7316,0.0003,false],[0.1288,0.0004,false],[0.3023,0.001,false],[0.467,0.0003,false],[0.4041,0.0003,false]]},{"enc":"ViT","sae":"D-MAT","vals":[[0.9612,0.0008,true],[0.5201,0.0011,true],[0.6305,0.0016,true],[0.8242,0.0001,true],[0.8245,0.0003,true],[0.9025,0.0008,true],[0.3596,0.0016,true],[0.6373,0.0042,true],[0.4705,0.0002,true],[0.4052,0.0003,true]]},{"enc":"ViT","sae":"GATE","vals":[[0.8225,0.0007,false],[0.2371,0.0005,false],[0.1462,0.0005,false],[0.8208,0.0005,false],[0.822,0.0008,false],[0.6908,0.0014,false],[0.1421,0.0016,false],[0.34,0.0028,false],[0.4665,0.0002,false],[0.406,0.0001,true]]},{"enc":"ViT","sae":"D-GATE","vals":[[0.9268,0.0075,true],[0.3657,0.0032,true],[0.3044,0.0036,true],[0.822,0.0005,true],[0.8236,0.0002,true],[0.7723,0.003,true],[0.2214,0.0007,true],[0.4594,0.0003,true],[0.4682,0.0001,true],[0.4059,0.0004,false]]},{"enc":"ViT","sae":"CB","vals":[[0.655,0.0027,false],[0.2809,0.0009,false],[0.364,0.0066,false],[0.7988,0.0014,false],[0.8078,0.0019,false],[0.5572,0.0013,false],[0.2564,0.0009,false],[0.5018,0.0007,false],[0.4655,0.0006,false],[0.4091,0.0011,true]]},{"enc":"ViT","sae":"CB-DUAL","vals":[[0.9823,0.0024,true],[0.3511,0.0023,true],[0.5963,0.0145,true],[0.8133,0.0004,true],[0.8093,0.0003,true],[0.9418,0.0031,true],[0.2919,0.0091,true],[0.582,0.0612,true],[0.48,0.0003,true],[0.4067,0.0002,false]]},{"enc":"CLIP","sae":"TK","vals":[[0.8189,0.001,false],[0.468,0.0007,false],[0.1572,0.0003,false],[0.8036,0.0007,false],[0.8326,0.0005,false],[0.7575,0.0007,false],[0.3798,0.0005,false],[0.2472,0.0003,false],[0.4682,0.0007,false],[0.399,0.0007,false]]},{"enc":"CLIP","sae":"D-TK","vals":[[0.9964,0.0002,true],[0.5603,0.0007,true],[0.4256,0.0002,true],[0.8155,0.0002,true],[0.845,0.0004,true],[0.9858,0.0006,true],[0.3879,0.0006,true],[0.58,0.0002,true],[0.4699,0.0002,true],[0.4077,0.0005,true]]},{"enc":"CLIP","sae":"BTK","vals":[[0.8472,0.0009,false],[0.4357,0.0008,false],[0.141,0.0006,false],[0.8069,0.0008,false],[0.8347,0.0009,false],[0.7863,0.0008,false],[0.3607,0.0006,false],[0.2584,0.0008,false],[0.4673,0.0008,false],[0.4053,0.0007,false]]},{"enc":"CLIP","sae":"D-BTK","vals":[[0.9972,0.0004,true],[0.575,0.0003,true],[0.4287,0.0004,true],[0.8156,0.0004,true],[0.8451,0.0003,true],[0.9957,0.0003,true],[0.451,0.0003,true],[0.6543,0.0006,true],[0.47,0.0005,true],[0.407,0.0006,true]]},{"enc":"CLIP","sae":"JR","vals":[[0.7792,0.0005,false],[0.4477,0.0006,false],[0.192,0.0003,false],[0.8002,0.0009,false],[0.8272,0.0009,false],[0.7361,0.0009,false],[0.3557,0.0009,false],[0.2553,0.0004,false],[0.4658,0.001,false],[0.4035,0.0009,false]]},{"enc":"CLIP","sae":"D-JR","vals":[[0.9745,0.0006,true],[0.4947,0.0005,true],[0.2642,0.0003,true],[0.8124,0.0006,true],[0.8424,0.0007,true],[0.9901,0.0002,true],[0.3599,0.0004,true],[0.3443,0.0004,true],[0.4699,0.0007,true],[0.4068,0.0008,true]]},{"enc":"CLIP","sae":"MAT","vals":[[0.8351,0.0003,false],[0.4889,0.0003,false],[0.2763,0.0017,false],[0.8064,0.0006,false],[0.8359,0.0003,false],[0.7734,0.0002,false],[0.3825,0.0008,false],[0.3276,0.0026,false],[0.4679,0.0002,false],[0.4047,0.0007,false]]},{"enc":"CLIP","sae":"D-MAT","vals":[[0.9998,0.0002,true],[0.5289,0.0045,true],[0.4721,0.0077,true],[0.8218,0.0008,true],[0.8488,0.0002,true],[0.9572,0.0008,true],[0.3939,0.0087,true],[0.6932,0.0044,true],[0.4712,0.0001,true],[0.4095,0.0002,true]]},{"enc":"CLIP","sae":"GATE","vals":[[0.8256,0.0006,false],[0.4013,0.0005,false],[0.092,0.0008,false],[0.8015,0.0009,false],[0.8324,0.0004,false],[0.7264,0.0005,false],[0.3431,0.0017,false],[0.2891,0.0021,false],[0.4648,0.0002,false],[0.4015,0.0008,false]]},{"enc":"CLIP","sae":"D-GATE","vals":[[0.994,0.0005,true],[0.4608,0.0026,true],[0.2995,0.0033,true],[0.8159,0.0002,true],[0.845,0.0001,true],[0.9246,0.0043,true],[0.3741,0.0054,true],[0.4466,0.0049,true],[0.4695,0.0002,true],[0.4088,0.0003,true]]},{"enc":"CLIP","sae":"CB","vals":[[0.5959,0.0012,false],[0.3679,0.0137,false],[0.4027,0.0052,false],[0.7709,0.0035,false],[0.7978,0.0036,false],[0.5653,0.0066,false],[0.4653,0.0022,false],[0.4857,0.0041,false],[0.4692,0.0009,false],[0.3972,0.0013,false]]},{"enc":"CLIP","sae":"CB-DUAL","vals":[[0.9865,0.0003,true],[0.3989,0.0088,true],[0.6872,0.0044,true],[0.8641,0.0001,true],[0.8283,0.0003,true],[0.9715,0.0009,true],[0.4952,0.0123,true],[0.5981,0.0842,true],[0.4771,0.0004,true],[0.4125,0.0002,true]]},{"enc":"SL2","sae":"TK","vals":[[0.6457,0.0009,false],[0.5903,0.001,false],[0.3412,0.001,false],[0.8311,0.001,false],[0.8663,0.0004,false],[0.5846,0.0011,false],[0.5473,0.0011,true],[0.3758,0.0009,false],[0.4679,0.0009,false],[0.3644,0.0008,false]]},{"enc":"SL2","sae":"D-TK","vals":[[0.9944,0.0005,true],[0.6354,0.0008,true],[0.4036,0.0008,true],[0.8517,0.0008,true],[0.883,0.0005,true],[0.969,0.0008,true],[0.5416,0.0005,false],[0.5944,0.0003,true],[0.4723,0.0004,true],[0.4104,0.0008,true]]},{"enc":"SL2","sae":"BTK","vals":[[0.8462,0.0008,false],[0.4689,0.0009,false],[0.227,0.0009,false],[0.8477,0.0009,false],[0.8763,0.0008,false],[0.7604,0.0012,false],[0.4473,0.0013,false],[0.3356,0.0005,false],[0.4705,0.0008,false],[0.4056,0.0006,false]]},{"enc":"SL2","sae":"D-BTK","vals":[[0.9942,0.0003,true],[0.6231,0.0009,true],[0.3958,0.0009,true],[0.8516,0.0005,true],[0.883,0.0004,true],[0.9814,0.0006,true],[0.5635,0.001,true],[0.6191,0.0002,true],[0.472,0.0005,true],[0.4102,0.0004,true]]},{"enc":"SL2","sae":"JR","vals":[[0.7853,0.0006,false],[0.512,0.0006,false],[0.2631,0.0006,false],[0.8451,0.0007,false],[0.8732,0.0007,false],[0.7172,0.0009,false],[0.4673,0.0009,false],[0.2899,0.0003,false],[0.4702,0.0007,false],[0.4051,0.0008,false]]},{"enc":"SL2","sae":"D-JR","vals":[[0.9806,0.0002,true],[0.577,0.0003,true],[0.3046,0.0003,true],[0.8504,0.0002,true],[0.8816,0.0005,true],[0.9583,0.0005,true],[0.4873,0.0004,true],[0.3421,0.0002,true],[0.4724,0.0005,true],[0.4095,0.0003,true]]},{"enc":"SL2","sae":"MAT","vals":[[0.8362,0.0,false],[0.5894,0.0005,false],[0.3261,0.0012,false],[0.8466,0.0008,false],[0.8768,0.0005,false],[0.7645,0.0004,false],[0.5261,0.0003,false],[0.3805,0.0008,false],[0.4712,0.0002,false],[0.4064,0.0003,false]]},{"enc":"SL2","sae":"D-MAT","vals":[[0.9083,0.0003,true],[0.5911,0.0023,true],[0.4819,0.0043,true],[0.849,0.0003,true],[0.8812,0.0003,true],[0.8731,0.001,true],[0.5581,0.0019,true],[0.4812,0.0038,true],[0.4999,0.0002,true],[0.4112,0.0001,true]]},{"enc":"SL2","sae":"GATE","vals":[[0.8372,0.0004,false],[0.5236,0.0016,false],[0.1291,0.0024,false],[0.8452,0.0007,false],[0.8758,0.0006,false],[0.7107,0.0015,false],[0.4668,0.0023,false],[0.2902,0.0022,false],[0.4694,0.0002,false],[0.4027,0.0009,false]]},{"enc":"SL2","sae":"D-GATE","vals":[[0.8812,0.0052,true],[0.5512,0.0048,true],[0.1923,0.0022,true],[0.8512,0.0011,true],[0.8822,0.0009,true],[0.911,0.0002,true],[0.4812,0.0004,true],[0.3011,0.0002,true],[0.4783,0.0002,true],[0.411,0.0002,true]]},{"enc":"SL2","sae":"CB","vals":[[0.5399,0.0011,false],[0.4693,0.0139,false],[0.4312,0.0016,false],[0.8108,0.0036,false],[0.8437,0.0034,false],[0.4865,0.0028,false],[0.571,0.0085,false],[0.5088,0.008,false],[0.4715,0.0004,false],[0.3996,0.0031,false]]},{"enc":"SL2","sae":"CB-DUAL","vals":[[0.9348,0.0004,true],[0.5291,0.0102,true],[0.5341,0.0132,true],[0.8444,0.0003,true],[0.8791,0.0002,true],[0.9712,0.0009,true],[0.5891,0.0112,true],[0.6012,0.0065,true],[0.4755,0.0003,true],[0.4202,0.0005,true]]}]</script>
+<script>
+(function(){
+  "use strict";
+  var T5 = JSON.parse(document.getElementById("t5-data").textContent);
+  var FAM = [["TK","D-TK","TopK"],["BTK","D-BTK","BatchTopK"],["JR","D-JR","JumpReLU"],["MAT","D-MAT","Matryoshka"],["GATE","D-GATE","GatedSAE"],["CB","CB-DUAL","CB-SAE"]];
+  var DS = [["IN","ImageNet-1K"],["OI","OpenImagesV7"]];
+  var ENC = [["CLIP","CLIP"],["SL2","SigLIP2"],["ViT","ViT"]];
+  var MET = [["R2","R²"],["MS","MonoScore"],["PUR","Class purity"],["KNN","KNN"],["LP","Linear probe"]];
+  var st = {ds:0, enc:0, met:0};
+
+  function find(enc, sae){ for (var i=0;i<T5.length;i++){ if (T5[i].enc===enc && T5[i].sae===sae) return T5[i]; } return null; }
+  function mkToggle(id, items, key){
+    var el = document.getElementById(id);
+    items.forEach(function(it, i){
+      var b = document.createElement("button"); b.type="button"; b.textContent=it[1];
+      b.setAttribute("aria-pressed", String(i===st[key]));
+      b.addEventListener("click", function(){ st[key]=i; [].forEach.call(el.children, function(c,j){ c.setAttribute("aria-pressed", String(j===i)); }); draw(); });
+      el.appendChild(b);
+    });
+  }
+  function ticks(lo, hi, n){
+    var span = hi-lo, step = Math.pow(10, Math.floor(Math.log10(span/n))), err = span/n/step;
+    if (err >= 7.5) step *= 10; else if (err >= 3.5) step *= 5; else if (err >= 1.5) step *= 2;
+    var t = [], v = Math.ceil(lo/step)*step;
+    for (; v <= hi + 1e-12; v += step) t.push(+v.toFixed(10));
+    return {t:t, step:step};
+  }
+  function fmt(v, step){ var d = Math.max(0, -Math.floor(Math.log10(step)) + (step < 1 ? 0 : 0)); return v.toFixed(Math.min(4, Math.max(2, d))); }
+  var NS = "http://www.w3.org/2000/svg";
+  function star(cx, cy, ro, ri){ var d = ""; for (var i = 0; i < 10; i++){ var a = -Math.PI/2 + i*Math.PI/5, rr = i % 2 ? ri : ro; d += (i ? "L" : "M") + (cx + rr*Math.cos(a)).toFixed(2) + " " + (cy + rr*Math.sin(a)).toFixed(2); } return d + "Z"; }
+  function el(tag, attrs, parent){ var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+
+  var svg = document.getElementById("chart-svg"), tip = document.getElementById("tip"), box = document.getElementById("chart");
+  function draw(){
+    while (svg.lastChild && svg.lastChild.nodeName !== "title") svg.removeChild(svg.lastChild);
+    var k = st.ds*5 + st.met, enc = ENC[st.enc][0];
+    var rows = FAM.map(function(f){ var b = find(enc, f[0]), d = find(enc, f[1]); return {name:f[2], dname:f[1], bname:f[0], b:b.vals[k], d:d.vals[k]}; });
+    var vals = []; rows.forEach(function(r){ vals.push(r.b[0], r.d[0]); });
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals), pad = (hi-lo)*0.08 || 0.01;
+    lo -= pad; hi += pad;
+    var W = Math.max(300, Math.round(box.clientWidth)), narrow = W < 560;
+    var L = narrow ? 94 : 118, R = narrow ? 62 : 92, top = 30, rowH = narrow ? 40 : 44, H = top + rows.length*rowH + 10;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H); svg.setAttribute("width", W); svg.setAttribute("height", H);
+    var x = function(v){ return L + (v-lo)/(hi-lo)*(W-L-R); };
+    var tk = ticks(lo, hi, 5), ax = el("g", {"class":"axis"}, svg);
+    tk.t.forEach(function(v){
+      el("line", {"class":"gridline", x1:x(v), x2:x(v), y1:top-8, y2:H-8}, ax);
+      var t = el("text", {x:x(v), y:top-14, "text-anchor":"middle"}, ax); t.textContent = fmt(v, tk.step);
+    });
+    var wins = 0;
+    rows.forEach(function(r, i){
+      var y = top + i*rowH + rowH/2, g = el("g", {"class":"row", tabindex:"0"}, svg);
+      var better = r.d[0] > r.b[0]; if (better) wins++;
+      el("rect", {"class":"hit", x:0, y:y-rowH/2, width:W, height:rowH, rx:8}, g);
+      var t = el("text", {"class":"fam", x:12, y:y+5}, g); t.textContent = r.name;
+      el("line", {x1:x(r.b[0]), x2:x(r.d[0]), y1:y, y2:y, stroke:"var(--link)", "stroke-width":2.5, "stroke-linecap":"round"}, g);
+      el("circle", {cx:x(r.b[0]), cy:y, r:7, fill:"var(--sae)", stroke:"var(--bg)", "stroke-width":2}, g);
+      el("path", {d:star(x(r.d[0]), y, 10, 4.3), fill:"var(--dual)", stroke:"var(--bg)", "stroke-width":1.5, "stroke-linejoin":"round"}, g);
+      var dv = r.d[0]-r.b[0], dt = el("text", {"class":"delta", x:W-8, y:y+5, "text-anchor":"end"}, g);
+      dt.textContent = (dv >= 0 ? "+" : "−") + Math.abs(dv).toFixed(Math.abs(dv) < 0.01 ? 4 : 3);
+      function show(ev){
+        var met = MET[st.met][1];
+        tip.innerHTML = "<b>" + r.name + "</b> &middot; " + ENC[st.enc][1] + " &middot; " + DS[st.ds][1] + "<br>" +
+          met + ": SAE " + r.b[0].toFixed(4) + " &plusmn; " + r.b[1].toFixed(4) + "<br>" +
+          met + ": DualSAE " + r.d[0].toFixed(4) + " &plusmn; " + r.d[1].toFixed(4);
+        var bb = box.getBoundingClientRect(), sb = svg.getBoundingClientRect(), s = sb.width / W;
+        var px = Math.min(Math.max(x(r.d[0]) * s, 120), bb.width - 120), py = (y - rowH/2) * s;
+        tip.style.left = (px - tip.offsetWidth/2) + "px"; tip.style.top = (py - tip.offsetHeight - 4) + "px"; tip.style.opacity = 1;
+      }
+      g.addEventListener("mouseenter", show); g.addEventListener("focus", show);
+      g.addEventListener("mouseleave", function(){ tip.style.opacity = 0; }); g.addEventListener("blur", function(){ tip.style.opacity = 0; });
+    });
+    document.getElementById("chart-note").innerHTML = "DualSAE is higher than its SAE counterpart for <b>" + wins + " of " + rows.length + "</b> SAE families (" +
+      MET[st.met][1] + ", " + ENC[st.enc][1] + ", " + DS[st.ds][1] + ").";
+    svg.querySelector("title").textContent = MET[st.met][1] + " of six SAE families and their DualSAE counterparts, " + ENC[st.enc][1] + " on " + DS[st.ds][1];
+  }
+  mkToggle("t-ds", DS, "ds"); mkToggle("t-enc", ENC, "enc"); mkToggle("t-met", MET, "met"); draw();
+  var rz; window.addEventListener("resize", function(){ clearTimeout(rz); rz = setTimeout(draw, 120); });
+
+  // radar toggle
+  var rad = document.getElementById("t-radar"), img = document.getElementById("radar-img");
+  [["ImageNet-1K","static/img/radar_imagenet.png"],["OpenImagesV7","static/img/radar_openimages.png"]].forEach(function(it, i){
+    var b = document.createElement("button"); b.type="button"; b.textContent=it[0]; b.setAttribute("aria-pressed", String(i===0));
+    b.addEventListener("click", function(){ img.src = it[1]; [].forEach.call(rad.children, function(c,j){ c.setAttribute("aria-pressed", String(j===i)); }); });
+    rad.appendChild(b);
+  });
+
+  // language table
+  var LANG = [{"corpus":"OpenWebText (OWT)","rows":[{"method":"JumpReLU","dual":false,"vals":[[0.7412,0.0201,false],[0.5498,0.0011,false],[0.8994,0.1209,false],[0.4995,0.1225,false]]},{"method":"Dual-JumpReLU","dual":true,"vals":[[0.1423,0.0097,true],[0.0532,0.0101,true],[0.9732,0.0464,true],[0.6882,0.0743,true]]},{"method":"TopK","dual":false,"vals":[[0.5538,0.0193,false],[0.5608,0.0201,false],[0.9677,0.0559,false],[0.4317,0.0541,false]]},{"method":"Dual-TopK","dual":true,"vals":[[0.0105,0.0022,true],[0.0131,0.0016,true],[0.9896,0.018,true],[0.6247,0.0236,true]]},{"method":"BatchTopK","dual":false,"vals":[[0.6587,0.0442,false],[0.6661,0.0441,false],[0.9432,0.0984,false],[0.4982,0.1455,false]]},{"method":"Dual-BatchTopK","dual":true,"vals":[[0.2118,0.0229,true],[0.3129,0.0206,true],[0.9887,0.0196,true],[0.9695,0.0078,true]]}]},{"corpus":"GitHub code (GHC)","rows":[{"method":"JumpReLU","dual":false,"vals":[[0.7843,0.1923,false],[0.6709,0.1009,false],[0.9223,0.0976,false],[0.5328,0.0843,false]]},{"method":"Dual-JumpReLU","dual":true,"vals":[[0.2544,0.0029,true],[0.3212,0.0084,true],[0.9865,0.0234,true],[0.842,0.0498,true]]},{"method":"TopK","dual":false,"vals":[[0.4108,0.1877,false],[0.431,0.1865,false],[0.9676,0.0561,false],[0.4194,0.142,false]]},{"method":"Dual-TopK","dual":true,"vals":[[0.1954,0.0903,true],[0.2033,0.0861,true],[0.9937,0.0109,true],[0.5182,0.0534,true]]},{"method":"BatchTopK","dual":false,"vals":[[2.4065,0.198,false],[2.4066,0.189,false],[0.9386,0.1063,false],[0.5637,0.1236,false]]},{"method":"Dual-BatchTopK","dual":true,"vals":[[1.7612,0.1293,true],[0.773,0.0302,true],[0.979,0.0364,true],[0.987,0.0039,true]]}]}];
+  var tb = document.getElementById("lang-body");
+  LANG.forEach(function(g){
+    var tr = document.createElement("tr"); tr.className = "grp"; tr.innerHTML = "<td colspan='5'>" + g.corpus + "</td>"; tb.appendChild(tr);
+    g.rows.forEach(function(r){
+      var tr = document.createElement("tr"); if (r.dual) tr.className = "ours";
+      tr.innerHTML = "<td>" + r.method + "</td>" + r.vals.map(function(v){ var s = v[0].toFixed(4) + "<span class='sd'>&plusmn;" + v[1].toFixed(4) + "</span>"; return "<td>" + (v[2] ? "<b>" + s + "</b>" : s) + "</td>"; }).join("");
+      tb.appendChild(tr);
+    });
+  });
+
+  // copy BibTeX
+  var cb = document.getElementById("copy-bib");
+  cb.addEventListener("click", function(){
+    var txt = document.getElementById("bib").textContent;
+    var done = function(){ cb.textContent = "Copied"; setTimeout(function(){ cb.textContent = "Copy"; }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, function(){ cb.textContent = "Select and copy"; });
+    else cb.textContent = "Select and copy";
+  });
+})();
+</script>
+</body>
+</html>
