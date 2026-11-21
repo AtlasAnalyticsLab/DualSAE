@@ -159,6 +159,22 @@ The entry points below run each experiment end to end; the linked README lists t
 
 Every table and figure is produced by a script from the run and evaluation outputs; no result values are stored in this repository.
 
+## 📝 Citation
+
+If you find DualSAE useful, please cite:
+
+```bibtex
+@misc{nguyen2026separating,
+  title         = {Separating Interpretability and Reconstruction in Sparse Autoencoders},
+  author        = {Anh Tien Nguyen and Dimitris Samaras and Mahdi S. Hosseini},
+  year          = {2026},
+  eprint        = {2611.25165},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2611.25165}
+}
+```
+
 ## 📄 License
 
 MIT (see [`LICENSE`](LICENSE)), except for third-party code, which keeps its own license (noted in the component READMEs).
