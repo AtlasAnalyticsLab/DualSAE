@@ -1,6 +1,15 @@
-# DualSAE: Separating Interpretability and Reconstruction in Sparse Autoencoders
+![DualSAE banner](./figures/dualsae_banner.png)
 
-Code for the anonymous submission *"Separating Interpretability and Reconstruction in Sparse Autoencoders"*.
+<div align="center">
+
+[![arXiv](https://img.shields.io/badge/DualSAE-arXiv.2611.25165-b31b1b.svg)](https://arxiv.org/abs/2611.25165)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C.svg?logo=pytorch&logoColor=white)](https://pytorch.org/)
+
+</div>
+
+In a standard sparse autoencoder (SAE), one sparse code has to serve two objectives that are not guaranteed to align: **interpretability** and **reconstruction fidelity**. **DualSAE** separates them. The standard SAE becomes the **Sparse Branch**, which learns interpretable, semantic features; a plug-in **Residual Branch** models the non-semantic information that the sparse code leaves out; and a **decorrelation loss** keeps the two branches from overlapping. Across six SAE families, three vision encoders, two vision datasets and two language corpora, DualSAE improves both reconstruction fidelity and interpretability, and its more interpretable features carry over to topic modeling, hypothesis generation and LLM steering.
 
 <p align="center">
   <img src="figures/dualsae_architecture.jpg" alt="DualSAE architecture" width="90%">
@@ -8,17 +17,73 @@ Code for the anonymous submission *"Separating Interpretability and Reconstructi
 
 <p align="center"><em><b>DualSAE architecture.</b> The Sparse Branch, a standard SAE, captures the semantic information of the input feature <code>x</code> in the sparse latent <code>z</code> and projects it back as <code>x^M</code>; the Residual Branch captures the non-semantic information <code>r_hat</code>. The final reconstruction is <code>x_hat = x^M + r_hat</code>.</em></p>
 
-DualSAE augments a standard sparse autoencoder with a plug-in **Residual Branch**:
+## ✨ Highlights
 
-- the **Sparse Branch** is an ordinary SAE (TopK, BatchTopK, JumpReLU, Matryoshka, Gated, or CB-SAE) that maps an embedding `x` to a sparse code `z` and reconstructs `x^M = W_D z + b_D`;
-- the **Residual Branch** reads the residual `r = x - x^M` and predicts `r_hat = Q(W_P r)`;
-- the final reconstruction is `x_hat = x^M + r_hat`.
+- **Plug-in for any SAE.** The Sparse Branch is an unchanged SAE: TopK, BatchTopK, JumpReLU, Matryoshka, Gated or CB-SAE.
+- **Vision and language.** CLIP, SigLIP2 and ViT features of ImageNet-1K and OpenImagesV7, and Pythia residual-stream activations of OpenWebText and GitHub code.
+- **Downstream applications.** SAE-based topic modeling, hypothesis generation and LLM steering.
+- **Every experiment is reproducible.** Each table and figure of the paper and its supplementary material is produced by a script in this repository (see the [paper-to-code map](#-paper-to-code-map)).
 
-Training minimizes `L = L_rec(x, x_hat) + lambda * L_sparse + gamma * L_dcor`, where the **decorrelation loss** `L_dcor = ||D_x^T r_hat||^2` penalizes the Residual Branch output along the decoder directions of the latents active for `x`. Training is two-stage: the Sparse Branch is first trained alone (warm-up), then both branches are trained jointly.
+## 🧩 Method
+
+Given an input embedding $x$, the **Sparse Branch** is a standard SAE with sparsification rule $S(\cdot)$ (TopK, BatchTopK, JumpReLU, ...):
+
+$$z = S(W_E x + b_E), \qquad x^M = W_D z + b_D .$$
+
+The **Residual Branch** reads the residual $r$ and predicts the non-semantic part of the embedding through a projector $W_P$ and a nonlinearity $Q$; the final reconstruction adds the two branches:
+
+$$r = x - x^M, \qquad \hat r = Q(W_P r), \qquad \hat x = x^M + \hat r .$$
+
+Training minimizes
+
+$$\mathcal{L} = \lVert x - \hat x \rVert_2^2 + \lambda \, \mathcal{L}_{\text{sparse}} + \gamma \, \lVert D_x^\top \hat r \rVert_2^2 ,$$
+
+where $D_x = W_D[:, \mathcal{A}(x)]$ holds the decoder directions of the latents active for $x$. The **decorrelation loss** $\lVert D_x^\top \hat r \rVert_2^2$ keeps the Residual Branch from overwriting information that the active sparse features already represent. Hard-sparsity SAEs (TopK, BatchTopK) do not use $\mathcal{L}_{\text{sparse}}$. Training has **two stages**: the Sparse Branch is first trained alone as a standard SAE (warm-up), then both branches are trained jointly.
+
+### Paper vs. code names
+
+The code predates the paper's final terminology. Internal names are kept so that checkpoints and run configurations stay loadable; the command-line interface accepts the paper's names as aliases.
+
+| Paper | Code |
+|---|---|
+| Sparse Branch, `x^M` | "mono" branch, `xM`, `W_enc` / `W_dec` / `b_dec` |
+| Residual Branch, `r_hat = Q(W_P r)` | "poly" branch, `poly` module, `r_hat` |
+| Decorrelation loss `L_dcor`, coefficient `gamma` | span-overlap penalty, `span_coef` (`--decorrelation_coef` alias) |
+| Two-stage training, Stage 1 length | `--warmup_steps` |
+| Sparsification rule `S(.)` | `--sparsity_mode {topk,batch_topk,jump_relu,matryoshka,gated,...}` |
+
+## 📦 Installation
+
+```bash
+git clone https://github.com/AtlasAnalyticsLab/DualSAE.git && cd DualSAE
+```
+
+Python 3.11+ and a CUDA GPU are assumed. Each component pins its own dependencies (they differ: the downstream applications need vLLM, the language experiments need `transformers` model hooks):
+
+```bash
+pip install -r vision/requirements.txt          # core + all vision experiments
+pip install -r <component>/requirements.txt     # any other component you want to run
+```
+
+## 🚀 Quick start
+
+Download the encoder weights and datasets once (on a machine with internet access), extract CLIP features of ImageNet-1K, and train a Dual-BatchTopK SAE:
+
+```bash
+HF_HOME=./assets/hf DATA_ROOT=./data bash vision/prepare_assets.sh
+cd vision
+python extract_imagenet.py --model clip --split train
+python extract_imagenet.py --model clip --split validation
+python main.py --model dual --sparsity_mode batch_topk --dataset imagenet --extractor clip --seed 42 \
+    --decorrelation_coef 0.005 --warmup_steps 17500 --dead_check_interval 100 --lr 1e-4 \
+    --exp_name my_dual_btk --output_dir ./checkpoints
+```
+
+The run writes `checkpoints/my_dual_btk/` with the selected checkpoint (`best_val_monoscore_model.pt`) and its metrics (`best_metrics.json`: R², MonoScore, class purity, KNN and linear-probe accuracy). See [`vision/README.md`](vision/README.md) for all options, the baselines and the full grid.
+
+## 🗂️ Repository layout
 
 This repository contains the code for **every experiment in the paper** (main text and supplementary material), organized by domain. Each directory has its own README with installation, asset preparation, and the exact commands for each table and figure.
-
-## Repository layout
 
 | Directory | Contents |
 |---|---|
@@ -31,32 +96,13 @@ This repository contains the code for **every experiment in the paper** (main te
 
 All components import the models from `vision/` (`vision/models/`), so there is a single implementation of every SAE.
 
-## Terminology: paper vs. code
+## 🔁 Reproducing the paper
 
-The code predates the paper's final terminology. Internal names are kept so that checkpoints and run configurations stay loadable; the command-line interface accepts the paper's names as aliases.
-
-| Paper | Code |
-|---|---|
-| Sparse Branch, `x^M` | "mono" branch, `xM`, `W_enc` / `W_dec` / `b_dec` |
-| Residual Branch, `r_hat = Q(W_P r)` | "poly" branch, `poly` module, `r_hat` |
-| Decorrelation loss `L_dcor`, coefficient `gamma` | span-overlap penalty, `span_coef` (`--decorrelation_coef` alias) |
-| Two-stage training, Stage 1 length | `--warmup_steps` |
-| Sparsification rule `S(.)` | `--sparsity_mode {topk,batch_topk,jump_relu,matryoshka,gated,...}` |
-
-## Installation
-
-Python 3.11+ and a CUDA GPU are assumed. Each component pins its own dependencies (they differ: the downstream applications need vLLM, the language experiments need `transformers` model hooks):
-
-```bash
-pip install -r vision/requirements.txt          # core + all vision experiments
-pip install -r <component>/requirements.txt     # any other component you want to run
-```
-
-## Assets and offline execution
+### Assets and offline execution
 
 Every download (datasets, encoder weights, language models, judges) lives in a separate `prepare_assets.sh` per component, so that training and evaluation can run on machines without internet access. Run the preparation script once on a machine with internet access, then run everything else offline (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`).
 
-## Running experiments
+### Running experiments
 
 All drivers are plain, sequential bash/python scripts with skip-if-done guards, so an interrupted grid can be re-launched and continues where it stopped. To use a cluster scheduler, wrap the single-cell commands (each driver documents its per-cell command) in your scheduler's job script; each component ships a `scripts/slurm_template.sh` with placeholders (e.g. [`vision/scripts/ablations/slurm_template.sh`](vision/scripts/ablations/slurm_template.sh)).
 
@@ -71,7 +117,7 @@ Some components consume the outputs of others; run them in this order:
 
 Results are reported as mean ± standard deviation over seeds 42, 43, 44. Seeds are the only dimension that is averaged; every other dimension (encoder, dataset, activation, warm-up, gamma, K, ...) is reported separately. A baseline SAE is compared only with the DualSAE that uses the same sparsification rule (TopK vs. Dual-TopK, BatchTopK vs. Dual-BatchTopK, ...).
 
-## Paper-to-code map
+### 🧭 Paper-to-code map
 
 The entry points below run each experiment end to end; the linked README lists the individual steps, options and outputs. Vision ablation paths are relative to [`vision/scripts/ablations/`](vision/scripts/ablations/README.md) (drivers) and `vision/analysis/ablations/` (table and figure builders).
 
@@ -113,6 +159,6 @@ The entry points below run each experiment end to end; the linked README lists t
 
 Every table and figure is produced by a script from the run and evaluation outputs; no result values are stored in this repository.
 
-## License
+## 📄 License
 
 MIT (see [`LICENSE`](LICENSE)), except for third-party code, which keeps its own license (noted in the component READMEs).
